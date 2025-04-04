@@ -3,6 +3,9 @@ import argparse
 import sys
 import logging
 import ocfl
+from validation import validate_files
+from s3_utils import sync_id_to_s3
+from es_utils import sync_id_to_es
 
 OCFL_ROOT = "/home/eroux/BUDA/softs/public-library-data-warehouse/acip/sungbum/archive/"
 OCFL_VERSION = "1.1"
@@ -21,6 +24,13 @@ def validate_version(version):
     
     return version
 
+def validate_id(id_s):
+    """Validates the version format. Must be 'head' or 'v' followed by digits."""
+    if not re.match(r'^IE\d[A-Z0-9_]+$', id_s):
+        raise argparse.ArgumentTypeError("id must be in the form IE then a digit, then upper case letters and digits")
+    
+    return id_s
+
 def to_ocfl_id(id_s):
     if id_s.startswith("IE"):
         return "http://purl.bdrc.io/resource/"+id_s
@@ -29,16 +39,6 @@ def to_ocfl_id(id_s):
     elif id_s.startswith("http://purl.bdrc.io/resource/IE"):
         return id_s
     raise "unable to parse id "+id_s
-
-def validate_files(args):
-    """Validates files for a specific ID in the given directory."""
-    logging.info(f"Validating files for ID: {args.id} in directory: {args.filesdir}")
-    # Add validation logic here
-
-def get_info(args):
-    """Retrieves information for a specific ID."""
-    logging.info(f"Getting information for ID: {args.id}")
-    # Add info retrieval logic here
 
 def sync_files_archive(args):
     """Synchronizes files for a specific ID with the given directory."""
@@ -87,6 +87,14 @@ def sync_files_archive(args):
                                            metadata=metadata)
     logging.info(f"Synced files for ID: {args.id} from directory: {args.filesdir}")
 
+def sync_files_s3(args):
+    # hardcode configuration (not ideal) so the command can be run without access to the archive
+    return sync_id_to_s3(args.id, args.filesdir)
+
+def sync_to_es(args):
+    # hardcode configuration (not ideal) so the command can be run without access to the archive
+    return sync_id_to_es(args.id, args.filesdir)
+
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
     dstdir = args.filesdir
@@ -122,30 +130,25 @@ def main():
     
     # Parser for the validate_files command
     validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
-    validate_parser.add_argument('--id', required=True, help='The ID to validate')
+    validate_parser.add_argument('--id', type=validate_id, required=True, help='The ID to validate')
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
     validate_parser.set_defaults(func=validate_files)
     
-    # Parser for the info command
-    info_parser = subparsers.add_parser('info', help='Get information for a specific ID')
-    info_parser.add_argument('--id', required=True, help='The ID to get information for')
-    info_parser.set_defaults(func=get_id_info)
-    
     # Parser for the sync command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
-    sync_parser.add_argument('--id', required=True, help='The ID to synchronize')
+    sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
     sync_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_parser.set_defaults(func=sync_files_archive)
 
     # Parser for the sync command
     sync_s3_parser = subparsers.add_parser('sync_s3', help='Synchronize files to s3 for a specific ID')
-    sync_s3_parser.add_argument('--id', required=True, help='The ID to synchronize')
+    sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
     sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_s3_parser.set_defaults(func=sync_files_s3)
     
     # Parser for the get_archive_files command
     archive_parser = subparsers.add_parser('get_archive_files', help='Get archive files for a specific ID')
-    archive_parser.add_argument('--id', required=True, help='The ID to get archive files for')
+    archive_parser.add_argument('--id', required=True, type=validate_id, help='The ID to get archive files for')
     archive_parser.add_argument('--version', type=validate_version, default="head", 
                               help="Version of the archive files (format: 'v' followed by digits, or 'head'). Default is 'head'")
     archive_parser.add_argument('--filesdir', required=True, help='Directory to save archive files to')
