@@ -3,6 +3,9 @@ import re
 import sys
 import html
 import re
+from bisect import bisect
+
+DEBUG = False
 
 def add_position_diff(positions, diffs, position, cumulative_diff):
     if not positions or position > positions[-1]:
@@ -25,7 +28,7 @@ def apply_position_diffs(positions, diffs, annotations):
             ann["c_end"] = correct_position(ann["c_end"], positions, diffs) 
 
 def get_string(orig, pattern_string , repl_fun, annotations):
-    p = re.compile(pattern_string)
+    p = re.compile(pattern_string, flags = re.MULTILINE | re.DOTALL)
     # for diffs
     diffs = []
     positions = []
@@ -44,11 +47,10 @@ def get_string(orig, pattern_string , repl_fun, annotations):
         if replacement_len < group_size:
             ot_len = 0
             if 'ot' in m.groupdict(): # opening tag
-                ot_len = len(match.group('ot'))
-                add_position_diff(positions, diffs, output_len, cumulative - ot_len)    
-            cumulative += group_size - replacement_len + ot_len
-            position = output_len + replacement_len
-            add_position_diff(positions, diffs, position, cumulative)
+                ot_len = len(m.group('ot'))
+                add_position_diff(positions, diffs, m.start()+1, cumulative - ot_len)
+            cumulative += replacement_len - group_size
+            add_position_diff(positions, diffs, m.end(), cumulative)
         elif replacement_len > group_size:
             # when the replacement is large, new indexes point to
             # the last original index
@@ -67,9 +69,37 @@ def get_string(orig, pattern_string , repl_fun, annotations):
     if last_match_end < len(orig):
         output += orig[last_match_end:]
 
+    if DEBUG:
+        print("\n\nXXX\n\n")
+        print(positions, diffs)
+        print(output)
+        debug_annotations(output, annotations)
     apply_position_diffs(positions, diffs, annotations)
-
+    if DEBUG:
+        print("\n\nYYY\n\n")
+        debug_annotations(output, annotations)
+        print("\n\nZZZ\n\n")
     return output
+
+def debug_annotations(text, annotations):
+    # Create a list of annotation boundaries to insert
+    boundaries = []
+    
+    for anno_type, anno_list in annotations.items():
+        for anno in anno_list:
+            # Store both the position and what to insert
+            boundaries.append((anno['c_start'], f"[{anno_type}]"))
+            boundaries.append((anno['c_end'], f"[/{anno_type}]"))
+    
+    # Sort boundaries by position (descending)
+    # We process from end to beginning to avoid shifting positions
+    boundaries.sort(reverse=True)
+    
+    # Insert the markers
+    result = text
+    for position, marker in boundaries:
+        result = result[:position] + marker + result[position:]
+    return result
 
 def convert_pages(text, annotations):
     """
@@ -82,11 +112,11 @@ def convert_pages(text, annotations):
         # don't replace the first one
         repl = "\n\n" if c_start > 0 else ""
         page_annotations.append({"pname": pname, "c_start": c_start + 2 if c_start > 0 else 0})
-        return 
-    pat_str = r'[\r\n\s]*<pb_marker>(?P<pname>:.*?)</pb_marker>[\r\n\s]*'
+        return repl
+    pat_str = r'[\r\n\s]*<pb_marker>(?P<pname>.*?)</pb_marker>[\r\n\s]*'
     output = get_string(text, pat_str, repl_pb_marker, annotations)
     for i, p_ann in enumerate(page_annotations):
-        p_ann["pnum"] = i
+        p_ann["pnum"] = i+1
         # assert that the first page starts at the beginning
         if i < len(page_annotations)-1:
             p_ann["c_end"] = page_annotations[i+1]["c_start"] - 2
@@ -107,7 +137,7 @@ def convert_hi(text, annotations):
         hi_annotations.append({"rend": rend, "c_start": m.start(), "c_end": m.end()})
         repl = m.group('content')
         return repl
-    pat_str = r'(?P<ot><hi_(?P<rend>[^>]+)>)(?P<content>:.*?)</hi_(?P=rend)>'
+    pat_str = r'(?P<ot><hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>'
     output = get_string(text, pat_str, repl_hi_marker, annotations)
     return output
 
@@ -119,6 +149,16 @@ def remove_other_markers(text, annotations):
         return ""
     pat_str = r'</?[^>]*?>'
     output = get_string(text, pat_str, repl_xml_marker, annotations)
+    return output
+
+def normalize_new_lines(text, annotations):
+    """
+    remove all xml markers
+    """
+    def repl_nl_marker(m, c_start):
+        return "\n"
+    pat_str = r'[\t \r]*\n[\t \r]*'
+    output = get_string(text, pat_str, repl_nl_marker, annotations)
     return output
 
 def unescape_xml(text, annotations):
@@ -141,7 +181,7 @@ def unescape_xml(text, annotations):
             repl = str(chr(int(num, 16)))
         return repl
 
-    pat_str = r'&(quot|apos|lt|lg|amp|#\d+);'
+    pat_str = r'&(quot|apos|lt|gt|amp|#\d+);'
     output = get_string(text, pat_str, repl_esc_xml, annotations)
     return output
 
@@ -216,7 +256,7 @@ def convert_tei_to_text(xml_file_path):
         String containing the plain text representation
     """
     # Parse the XML file
-    parser = etree.XMLParser(remove_blank_text=True, recover=True)
+    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
     tree = etree.parse(xml_file_path, parser)
     root = tree.getroot()
     
@@ -233,14 +273,16 @@ def convert_tei_to_text(xml_file_path):
     body_copy.extend(body[0].xpath("./*"))
     
     # Process the TEI elements
-    
+
     # Remove all note elements
     for note in body_copy.xpath('.//tei:note', namespaces=namespaces):
         replace_element(note, None)
-    
+
     # Remove all gap elements
     for gap in body_copy.xpath('.//tei:gap', namespaces=namespaces):
-        replace_element(gap, None)
+        text_element = etree.Element("text_marker")
+        text_element.text = "X"
+        replace_element(gap, text_element)
     
     # Process figure elements - extract caption text
     for figure in body_copy.xpath('.//tei:figure', namespaces=namespaces):
@@ -252,8 +294,6 @@ def convert_tei_to_text(xml_file_path):
         text_element = etree.Element("text_marker")
         text_element.text = caption_text
         replace_element(figure, text_element)
-
-    print(etree.tostring(body_copy, encoding="unicode", method="xml"))
 
     for hi in body_copy.xpath('.//tei:hi', namespaces=namespaces):
         render_val = hi.get('render')
@@ -268,8 +308,6 @@ def convert_tei_to_text(xml_file_path):
             # Copy any tail text
             new_tag.tail = hi.tail
             replace_element(hi, new_tag)
-
-    print(etree.tostring(body_copy, encoding="unicode", method="xml"))
 
     # Process unclear/supplied elements - keep supplied text
     for unclear in body_copy.xpath('.//tei:unclear', namespaces=namespaces):
@@ -292,7 +330,9 @@ def convert_tei_to_text(xml_file_path):
     # Replace all pb elements with custom markers
     for pb in body_copy.xpath('.//tei:pb', namespaces=namespaces):
         pb_marker = etree.Element("pb_marker")
-        pb_marker.text = "\n\n"
+        pnum = pb.get('n')
+        if pnum:
+            pb_marker.text = pnum
         replace_element(pb, pb_marker)
     
     # Replace all lb elements with custom markers
@@ -300,15 +340,12 @@ def convert_tei_to_text(xml_file_path):
         lb_marker = etree.Element("lb_marker")
         lb_marker.text = "\n"
         replace_element(lb, lb_marker)
-    
+        
     # Get the text content
     xml_str = etree.tostring(body_copy, encoding="unicode", method="xml")
-    print(xml_str)
-    
-    # remove xml comments (not sure there can be any but...)
-    xml_str = re.sub(r'<!--.*?-->', '', xml_str)
 
     # Simple substitutions
+    xml_str = re.sub(r'[\r\n\t ]*</?body>[\r\n\t ]*', "", xml_str) # this also normalizes spaces at the beginning and end
     xml_str = re.sub(r'<text_marker>(.*?)</text_marker>', r'\1', xml_str)
     xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str)
     
@@ -317,8 +354,9 @@ def convert_tei_to_text(xml_file_path):
     xml_str = convert_hi(xml_str, annotations)
     xml_str = remove_other_markers(xml_str, annotations)
     xml_str = unescape_xml(xml_str, annotations)
-    
-    return xml_str
+    xml_str = normalize_new_lines(xml_str, annotations)
+
+    return xml_str, annotations
 
 def test_conversion():
     """Test the TEI to text conversion with a sample XML string"""
@@ -335,8 +373,8 @@ def test_conversion():
         <body>
           <p>This is the first paragraph.<lb/>This is on a new line.</p>
           <pb n="123"/>
-          This is on a new page.
-          This start a <hi render="small">highlight
+          This is on a new <random_tag/>page.
+          This <!-- comment to be removed -->starts a <hi render="small">highlight
           <note>This note should be removed.</note>
           Special characters: &lt;tag&gt; &amp; &quot;quoted&quot;
           This note <note>with inline content</note> should be </hi>partially removed.
@@ -358,7 +396,8 @@ def test_conversion():
         tmp_path = tmp.name
     
     # Convert the test file
-    result = convert_tei_to_text(tmp_path)
+    text, annotations = convert_tei_to_text(tmp_path)
+    text_with_anns = debug_annotations(text, annotations)
     
     # Clean up
     import os
@@ -367,23 +406,24 @@ def test_conversion():
     # Print result
     print("Test Result:")
     print("-" * 40)
-    print(result)
+    print(text_with_anns)
     print("-" * 40)
     
     expected = """This is the first paragraph.
 This is on a new line.
 
-This is on a new page.
-This start a highlight
+[pages]This is on a new page.
+This starts a [hi]highlight
 
 Special characters: <tag> & "quoted"
-This note  should be partially removed.
-There was a  in the text.
+This note  should be [/hi]partially removed.
+There was a X in the text.
 This is a figure caption
 The word is probably correct.
-The spelling cat was fixed."""
+The spelling cat was fixed.[/pages]"""
     
-    print("Test passed!" if result.strip() == expected.strip() else "Test failed!")
+    print("Test passed!" if text_with_anns == expected else "Test failed!")
+
     
 if __name__ == "__main__":
     # Run the test function
