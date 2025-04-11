@@ -4,8 +4,129 @@ import sys
 import html
 import re
 from bisect import bisect
+import os
+import glob
+
+from opensearchpy import OpenSearch, helpers
+
+from openpecha.buda.chunker import TibetanEasyChunker
+
+INDEX = "bdrc_prod"
+
+CLIENT = OpenSearch(
+    hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
+    http_compress = True, # enables gzip compression for request bodies
+    http_auth = (os.getenv("OPENSEARCH_USER"), os.getenv("OPENSEARCH_PASS")),
+    use_ssl = True
+)
+
+def remove_previous_etext_es(ie):
+    try:
+        response = CLIENT.delete_by_query(
+            index=INDEX,
+            body={
+                "query": {
+                    "term": {
+                        "etext_instance": {
+                            "value": ie
+                        }
+                    }
+                }
+            }
+        )
+        logging.info(f"Deleted {response['deleted']} documents for {ie}.")
+    except Exception as e:
+        logging.error(f"An error occurred in deletion: {e}")
+
+def send_docs_to_es(docs_by_volume, ie):
+    if ie:
+        remove_previous_etext_es(ie)
+    try:
+        for vol_name, volume_docs in docs_by_volume.items():
+            logging.info("sending %d documents in bulk" % len(volume_docs))
+            response = helpers.bulk(CLIENT, volume_docs, max_retries=3, request_timeout=60)
+    except:
+        logging.exception("The request to ES had an exception for " + ie)
+
+def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum):
+    """
+    """
+    # Construct the path to the archive directory
+    archive_path = os.path.join(local_dir_path, "archive")
+
+    docs_by_volume = {}
+    
+    # Check if the archive directory exists
+    if not os.path.exists(archive_path):
+        print(f"Archive directory does not exist at {archive_path}")
+        return
+
+    # Iterate through all subdirectories in the archive directory
+    for vol_name, vol_num in volname_to_volnum.items():
+        vol_path = os.path.join(archive_path, vol_name)
+        
+        # Skip if not a directory
+        if not os.path.isdir(vol_path):
+            print(f"Skip {vol_name} (no directory with that name under archive/)")
+            continue
+        
+        print(f"Processing volume: {vol_name}")
+        
+        # Get all XML files in the current subdirectory
+        xml_files = glob.glob(os.path.join(vol_path, "*.xml"))
+        
+        # Sort the XML files alphabetically
+        xml_files.sort()
+        
+        # Process each XML file
+        for i, xml_file_path in enumerate(xml_files):
+            # Extract just the filename without the path
+            doc_name = os.path.basename(xml_file_path)
+            
+            # Call the get_docs function
+            doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname)
+
+            if vol_name not in docs_by_volume:
+                docs[vol_name] = []
+            docs[vol_name].append(doc)
+
+    send_docs_to_es(docs_by_volume, ie_lname)
 
 DEBUG = False
+
+def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+    base_string, annotations, source_file = convert_tei_to_text(xml_file_path)
+    etext_doc = {}
+    etext_doc["_id"] = doc_name
+    etext_doc["_index"] = INDEX
+    etext_doc["routing"] = mw_lname
+    etext_doc["type"] = ["Etext"]
+    etext_doc["etext_quality"] = 4.0 # ?
+    etext_doc["etext_instance"] = ie_lname
+    etext_doc["etext_for_root_instance"] = mw_root_lname
+    etext_doc["etext_for_instance"] = mw_lname
+    etext_doc["join_field"] = { "name": "etext", "parent": mw }
+    etext_doc["etextNumber"] = doc_num
+    etext_doc["etext_vol"] = vol_name
+    etext_doc["volumeNumber"] = vol_num
+    etext_doc["version"] = ocfl_version
+    etext_doc["source_path"] = source_path
+    if "pages" in annotations:
+        etext_doc["etext_pages"] = annotations["pages"]
+    if "hi" in annotations:
+        etext_doc["etext_spans"] = annotations["hi"]
+    # TODO: handle non-Tibetan
+    chunker = TibetanEasyChunker(base_string, 1500, char_start, char_end)
+    chunk_indexes = chunker.get_chunks()
+    for i in range(0, len(chunk_indexes) - 1):
+        if "chunks" not in etext_doc:
+            etext_doc["chunks"] = []
+        etext_doc["chunks"].append({
+            "cstart": chunk_indexes[i],
+            "cend": chunk_indexes[i + 1],
+            "text_bo": state["volume_str"]["str"][chunk_indexes[i]:chunk_indexes[i + 1]]
+        })
+
 
 def add_position_diff(positions, diffs, position, cumulative_diff):
     if not positions or position > positions[-1]:
@@ -24,8 +145,8 @@ def correct_position(current_position, positions, diffs):
 def apply_position_diffs(positions, diffs, annotations):
     for type, ann_list in annotations.items():
         for ann in ann_list:
-            ann["c_start"] = correct_position(ann["c_start"], positions, diffs)
-            ann["c_end"] = correct_position(ann["c_end"], positions, diffs) 
+            ann["cstart"] = correct_position(ann["cstart"], positions, diffs)
+            ann["cend"] = correct_position(ann["cend"], positions, diffs) 
 
 def get_string(orig, pattern_string , repl_fun, annotations):
     p = re.compile(pattern_string, flags = re.MULTILINE | re.DOTALL)
@@ -88,8 +209,8 @@ def debug_annotations(text, annotations):
     for anno_type, anno_list in annotations.items():
         for anno in anno_list:
             # Store both the position and what to insert
-            boundaries.append((anno['c_start'], f"[{anno_type}]"))
-            boundaries.append((anno['c_end'], f"[/{anno_type}]"))
+            boundaries.append((anno['cstart'], f"[{anno_type}]"))
+            boundaries.append((anno['cend'], f"[/{anno_type}]"))
     
     # Sort boundaries by position (descending)
     # We process from end to beginning to avoid shifting positions
@@ -106,12 +227,12 @@ def convert_pages(text, annotations):
     replaces <pb_marker>{pname}</pb_marker> with 
     """
     page_annotations = []
-    def repl_pb_marker(m, c_start):
+    def repl_pb_marker(m, cstart):
         pname = m.group("pname")
-        c_start = c_start
+        cstart = cstart
         # don't replace the first one
-        repl = "\n\n" if c_start > 0 else ""
-        page_annotations.append({"pname": pname, "c_start": c_start + 2 if c_start > 0 else 0})
+        repl = "\n\n" if cstart > 0 else ""
+        page_annotations.append({"pname": pname, "cstart": cstart + 2 if cstart > 0 else 0})
         return repl
     pat_str = r'[\r\n\s]*<pb_marker>(?P<pname>.*?)</pb_marker>[\r\n\s]*'
     output = get_string(text, pat_str, repl_pb_marker, annotations)
@@ -119,9 +240,9 @@ def convert_pages(text, annotations):
         p_ann["pnum"] = i+1
         # assert that the first page starts at the beginning
         if i < len(page_annotations)-1:
-            p_ann["c_end"] = page_annotations[i+1]["c_start"] - 2
+            p_ann["cend"] = page_annotations[i+1]["cstart"] - 2
         else:
-            p_ann["c_end"] = len(output)
+            p_ann["cend"] = len(output)
     annotations["pages"] = page_annotations
     return output
 
@@ -132,9 +253,9 @@ def convert_hi(text, annotations):
     if "hi" not in annotations:
         annotations["hi"] = []
     hi_annotations = annotations["hi"]
-    def repl_hi_marker(m, c_start):
+    def repl_hi_marker(m, cstart):
         rend = m.group("rend")
-        hi_annotations.append({"rend": rend, "c_start": m.start(), "c_end": m.end()})
+        hi_annotations.append({"rend": rend, "cstart": m.start(), "cend": m.end()})
         repl = m.group('content')
         return repl
     pat_str = r'(?P<ot><hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>'
@@ -145,7 +266,7 @@ def remove_other_markers(text, annotations):
     """
     remove all xml markers
     """
-    def repl_xml_marker(m, c_start):
+    def repl_xml_marker(m, cstart):
         return ""
     pat_str = r'</?[^>]*?>'
     output = get_string(text, pat_str, repl_xml_marker, annotations)
@@ -155,7 +276,7 @@ def normalize_new_lines(text, annotations):
     """
     remove all xml markers
     """
-    def repl_nl_marker(m, c_start):
+    def repl_nl_marker(m, cstart):
         return "\n"
     pat_str = r'[\t \r]*\n[\t \r]*'
     output = get_string(text, pat_str, repl_nl_marker, annotations)
@@ -171,7 +292,7 @@ def unescape_xml(text, annotations):
         '&amp;': '&'
     }
 
-    def repl_esc_xml(m, c_start):
+    def repl_esc_xml(m, cstart):
         escaped_entity = m.group(0)
         repl = ''
         if escaped_entity in simple_replacements:
@@ -262,6 +383,10 @@ def convert_tei_to_text(xml_file_path):
     
     # Find the body element (handle TEI namespace if present)
     namespaces = {'tei': 'http://www.tei-c.org/ns/1.0'}
+
+    source_path = root.xpath('//tei:idno[@type="SRC_PATH"]/text()', namespaces=ns)
+    source_path = source_path[0] if source_path else None
+
     body = root.xpath('//tei:body', namespaces=namespaces)
         
     if not body:
@@ -345,6 +470,7 @@ def convert_tei_to_text(xml_file_path):
     xml_str = etree.tostring(body_copy, encoding="unicode", method="xml")
 
     # Simple substitutions
+    xml_str = xml_str.replace("\uFEFF", "")
     xml_str = re.sub(r'[\r\n\t ]*</?body>[\r\n\t ]*', "", xml_str) # this also normalizes spaces at the beginning and end
     xml_str = re.sub(r'<text_marker>(.*?)</text_marker>', r'\1', xml_str)
     xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str)
@@ -356,7 +482,7 @@ def convert_tei_to_text(xml_file_path):
     xml_str = unescape_xml(xml_str, annotations)
     xml_str = normalize_new_lines(xml_str, annotations)
 
-    return xml_str, annotations
+    return xml_str, annotations, source_path
 
 def test_conversion():
     """Test the TEI to text conversion with a sample XML string"""
