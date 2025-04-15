@@ -6,12 +6,16 @@ import re
 from bisect import bisect
 import os
 import glob
+import json
+import logging
 
 from opensearchpy import OpenSearch, helpers
 
-from openpecha.buda.chunker import TibetanEasyChunker
+from chunkers import TibetanEasyChunker
 
 INDEX = "bdrc_prod"
+DEBUG = False
+
 
 CLIENT = OpenSearch(
     hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
@@ -44,6 +48,9 @@ def send_docs_to_es(docs_by_volume, ie):
     try:
         for vol_name, volume_docs in docs_by_volume.items():
             logging.info("sending %d documents in bulk" % len(volume_docs))
+            #if DEBUG:
+            if True:
+                print(json.dumps(volume_docs, indent=2, ensure_ascii=False))
             response = helpers.bulk(CLIENT, volume_docs, max_retries=3, request_timeout=60)
     except:
         logging.exception("The request to ES had an exception for " + ie)
@@ -51,6 +58,7 @@ def send_docs_to_es(docs_by_volume, ie):
 def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum):
     """
     """
+    logging.info(f"get docs for {local_dir_path}")
     # Construct the path to the archive directory
     archive_path = os.path.join(local_dir_path, "archive")
 
@@ -63,11 +71,12 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
 
     # Iterate through all subdirectories in the archive directory
     for vol_name, vol_num in volname_to_volnum.items():
+
         vol_path = os.path.join(archive_path, vol_name)
         
         # Skip if not a directory
         if not os.path.isdir(vol_path):
-            print(f"Skip {vol_name} (no directory with that name under archive/)")
+            logging.error(f"Skip {vol_name} (no directory with that name under archive/)")
             continue
         
         print(f"Processing volume: {vol_name}")
@@ -79,23 +88,29 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
         xml_files.sort()
         
         # Process each XML file
-        for i, xml_file_path in enumerate(xml_files):
+        for doc_num, xml_file_path in enumerate(xml_files):
+            logging.info(f"get doc for {xml_file_path}")
             # Extract just the filename without the path
             doc_name = os.path.basename(xml_file_path)
             
             # Call the get_docs function
-            doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname)
-
+            doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
+            if not doc:
+                logging.error(f"could not convert {doc_name}")
+                continue
             if vol_name not in docs_by_volume:
-                docs[vol_name] = []
-            docs[vol_name].append(doc)
+                docs_by_volume[vol_name] = []
+            docs_by_volume[vol_name].append(doc)
 
-    send_docs_to_es(docs_by_volume, ie_lname)
+    return docs_by_volume
 
-DEBUG = False
+def sync_id_to_es(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum):
+    docs_by_volume = get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum)
+    if docs_by_volume:
+        send_docs_to_es(docs_by_volume, ie_lname)
 
 def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
-    base_string, annotations, source_file = convert_tei_to_text(xml_file_path)
+    base_string, annotations, source_path = convert_tei_to_text(xml_file_path)
     etext_doc = {}
     etext_doc["_id"] = doc_name
     etext_doc["_index"] = INDEX
@@ -105,18 +120,18 @@ def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, i
     etext_doc["etext_instance"] = ie_lname
     etext_doc["etext_for_root_instance"] = mw_root_lname
     etext_doc["etext_for_instance"] = mw_lname
-    etext_doc["join_field"] = { "name": "etext", "parent": mw }
+    etext_doc["join_field"] = { "name": "etext", "parent": mw_lname }
     etext_doc["etextNumber"] = doc_num
     etext_doc["etext_vol"] = vol_name
     etext_doc["volumeNumber"] = vol_num
-    etext_doc["version"] = ocfl_version
+    etext_doc["ocfl_version"] = ocfl_version
     etext_doc["source_path"] = source_path
     if "pages" in annotations:
         etext_doc["etext_pages"] = annotations["pages"]
     if "hi" in annotations:
         etext_doc["etext_spans"] = annotations["hi"]
     # TODO: handle non-Tibetan
-    chunker = TibetanEasyChunker(base_string, 1500, char_start, char_end)
+    chunker = TibetanEasyChunker(base_string, 1500, 0, len(base_string))
     chunk_indexes = chunker.get_chunks()
     for i in range(0, len(chunk_indexes) - 1):
         if "chunks" not in etext_doc:
@@ -124,8 +139,9 @@ def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, i
         etext_doc["chunks"].append({
             "cstart": chunk_indexes[i],
             "cend": chunk_indexes[i + 1],
-            "text_bo": state["volume_str"]["str"][chunk_indexes[i]:chunk_indexes[i + 1]]
+            "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
         })
+    return etext_doc
 
 
 def add_position_diff(positions, diffs, position, cumulative_diff):
@@ -384,7 +400,7 @@ def convert_tei_to_text(xml_file_path):
     # Find the body element (handle TEI namespace if present)
     namespaces = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
-    source_path = root.xpath('//tei:idno[@type="SRC_PATH"]/text()', namespaces=ns)
+    source_path = root.xpath('//tei:idno[@type="SRC_PATH"]/text()', namespaces=namespaces)
     source_path = source_path[0] if source_path else None
 
     body = root.xpath('//tei:body', namespaces=namespaces)
@@ -522,7 +538,7 @@ def test_conversion():
         tmp_path = tmp.name
     
     # Convert the test file
-    text, annotations = convert_tei_to_text(tmp_path)
+    text, annotations, source_path = convert_tei_to_text(tmp_path)
     text_with_anns = debug_annotations(text, annotations)
     
     # Clean up

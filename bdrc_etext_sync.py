@@ -6,6 +6,7 @@ import ocfl
 from validation import validate_files
 from s3_utils import sync_id_to_s3
 from es_utils import sync_id_to_es
+import re
 
 OCFL_ROOT = "/home/eroux/BUDA/softs/public-library-data-warehouse/acip/sungbum/archive/"
 OCFL_VERSION = "1.1"
@@ -91,9 +92,24 @@ def sync_files_s3(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
     return sync_id_to_s3(args.id, args.filesdir)
 
+def get_ie_info(ie_lname):
+    # TODO: implement
+    return {
+        "mw_lname": "MW1ER24",
+        "mw_root_lname": "MW1ER24",
+        "mw_root_lname": "MW1ER24",
+        "volname_to_volnum": {
+            "VE1ER1": 1
+        }
+    }
+
 def sync_to_es(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
-    return sync_id_to_es(args.id, args.filesdir)
+    ie_info = get_ie_info(args.id)
+    if not ie_info:
+        logger.error(f"could not find {args.id} in the database")
+        return
+    return sync_id_to_es(ie_info["mw_lname"], ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"])
 
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
@@ -145,7 +161,14 @@ def main():
     sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
     sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_s3_parser.set_defaults(func=sync_files_s3)
-    
+
+    # Parser for the sync command
+    sync_s3_parser = subparsers.add_parser('sync_es', help='Synchronize files to ElasticSearch for a specific ID and path')
+    sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
+    sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
+    sync_s3_parser.add_argument('--version', required=True, type=validate_version, help='OCFL version of the files')
+    sync_s3_parser.set_defaults(func=sync_to_es)
+
     # Parser for the get_archive_files command
     archive_parser = subparsers.add_parser('get_archive_files', help='Get archive files for a specific ID')
     archive_parser.add_argument('--id', required=True, type=validate_id, help='The ID to get archive files for')
