@@ -11,22 +11,26 @@ import logging
 
 from opensearchpy import OpenSearch, helpers
 
-from chunkers import TibetanEasyChunker
+from .chunkers import TibetanEasyChunker
 
 INDEX = "bdrc_prod"
 DEBUG = False
 
-
-CLIENT = OpenSearch(
-    hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
-    http_compress = True, # enables gzip compression for request bodies
-    http_auth = (os.getenv("OPENSEARCH_USER"), os.getenv("OPENSEARCH_PASS")),
-    use_ssl = True
-)
+CLIENT = None
+def get_os_client():
+    global CLIENT
+    if not CLIENT:
+        CLIENT = OpenSearch(
+            hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
+            http_compress = True, # enables gzip compression for request bodies
+            http_auth = (os.getenv("OPENSEARCH_USER"), os.getenv("OPENSEARCH_PASS")),
+            use_ssl = True
+        )
+    return CLIENT
 
 def remove_previous_etext_es(ie):
     try:
-        response = CLIENT.delete_by_query(
+        response = get_os_client().delete_by_query(
             index=INDEX,
             body={
                 "query": {
@@ -51,7 +55,7 @@ def send_docs_to_es(docs_by_volume, ie):
             #if DEBUG:
             if True:
                 print(json.dumps(volume_docs, indent=2, ensure_ascii=False))
-            response = helpers.bulk(CLIENT, volume_docs, max_retries=3, request_timeout=60)
+            response = helpers.bulk(get_os_client(), volume_docs, max_retries=3, request_timeout=60)
     except:
         logging.exception("The request to ES had an exception for " + ie)
 

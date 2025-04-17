@@ -6,6 +6,8 @@ from lxml import etree
 import requests
 from rdflib import Graph, URIRef
 from urllib.parse import urlparse
+import logging
+from importlib import resources
 
 def get_volumes(ie_lname):
     """
@@ -169,13 +171,14 @@ def validate_files(args):
                 
                 # Validate against TEI schema
                 try:
-                    # This part assumes you have access to the TEI schema
-                    # You might need to adjust this based on how you handle schemas
-                    tei_schema = etree.RelaxNG(file="path_to_tei_schema.rng")  # Adjust path as needed
-                    xml_doc = etree.parse(filepath)
-                    is_valid = tei_schema.validate(xml_doc)
-                    if not is_valid:
-                        errors.append(f"File {filename} in volume {volume} is not a valid TEI XML: {tei_schema.error_log}")
+                    with resources.path('bdrc_etext_sync.schemas', 'tei_lite.rng') as schema_path:
+                        # This part assumes you have access to the TEI schema
+                        # You might need to adjust this based on how you handle schemas
+                        tei_schema = etree.RelaxNG(file=schema_path)
+                        xml_doc = etree.parse(filepath)
+                        is_valid = tei_schema.validate(xml_doc)
+                        if not is_valid:
+                            errors.append(f"File {filename} in volume {volume} is not a valid TEI XML: {tei_schema.error_log}")
                 except Exception as e:
                     errors.append(f"Error validating TEI for {filename} in volume {volume}: {str(e)}")
                     continue
@@ -224,4 +227,13 @@ def validate_files(args):
     # Function passes if there are no errors
     passed = len(errors) == 0
     
+    logging.info("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
+    if warns:
+        logging.warn("Validation warnings:")
+        for warn in warns:
+            logging.warn("  "+warn)
+    if errors:
+        logging.error("Validation errors:")
+        for error in errors:
+            logging.error("  "+error)
     return passed, warns, errors

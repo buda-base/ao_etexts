@@ -3,9 +3,9 @@ import argparse
 import sys
 import logging
 import ocfl
-from validation import validate_files
-from s3_utils import sync_id_to_s3
-from es_utils import sync_id_to_es
+from .validation import validate_files
+from .s3_utils import sync_id_to_s3
+from .es_utils import sync_id_to_es
 import re
 
 OCFL_ROOT = "/home/eroux/BUDA/softs/public-library-data-warehouse/acip/sungbum/archive/"
