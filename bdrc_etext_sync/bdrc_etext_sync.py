@@ -3,7 +3,7 @@ import argparse
 import sys
 import logging
 import ocfl
-from .validation import validate_files
+from .validation import validate_files_and_log
 from .s3_utils import sync_id_to_s3
 from .es_utils import sync_id_to_es
 import re
@@ -46,10 +46,6 @@ def sync_files_archive(args):
     srcdir = args.filesdir
     if not os.path.isdir(srcdir):
         raise "not a directory: "+srcdir
-    passed, errors = validate_files(srcdir)
-    if not passed:
-        logging.error(error)
-        raise srcdir+"contains invalid files"
     store = ocfl.StorageRoot(root=OCFL_ROOT)
     ocfl_id = to_ocfl_id(args.id)
     objdir = store.object_path(ocfl_id)
@@ -68,7 +64,7 @@ def sync_files_archive(args):
         # if the object directory exists, make sure it is a valid OCFL object
         logging.info("validating previous version of object in "+objdir)
         passed, validator = obj.validate(objdir=objdir,
-                                     log_warnings=False,
+                                     log_warnings=True,
                                      log_errors=True,
                                      check_digests=True)
         if not passed:
@@ -148,7 +144,7 @@ def main():
     validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
     validate_parser.add_argument('--id', type=validate_id, required=True, help='The ID to validate')
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
-    validate_parser.set_defaults(func=validate_files)
+    validate_parser.set_defaults(func=validate_files_and_log)
     
     # Parser for the sync command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')

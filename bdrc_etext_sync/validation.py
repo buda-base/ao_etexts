@@ -23,7 +23,7 @@ def get_volumes(ie_lname):
         Exception: If HTTP response is not 200 or if RDF parsing fails
     """
     # Construct the URL for the resource
-    url = f"https://ldspdi.bdrc.io/resource/{ie_lname}.ttl"
+    url = f"https://ldspdi-dev.bdrc.io/resource/{ie_lname}.ttl"
     
     # Fetch the data
     response = requests.get(url)
@@ -62,6 +62,19 @@ def get_volumes(ie_lname):
     
     return volume_local_names
 
+def validate_files_and_log(args):
+    logging.info(f"Validating files for ID: {args.id} in directory: {args.filesdir}")
+    passed, warns, errors = validate_files(args)
+    logging.warn("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
+    if warns:
+        logging.warn("Validation warnings:")
+        for warn in warns:
+            logging.warn("  "+warn)
+    if errors:
+        logging.error("Validation errors:")
+        for error in errors:
+            logging.error("  "+error)
+
 def validate_files(args):
     """Validates files for a specific ID in the given directory.
     returns two values:
@@ -69,8 +82,6 @@ def validate_files(args):
       warns (list of warning strings)
       errors (list of error strings)
     """
-    logging.info(f"Validating files for ID: {args.id} in directory: {args.filesdir}")
-    
     errors = []
     warns = []
     
@@ -136,10 +147,10 @@ def validate_files(args):
                     continue
                 
                 # Check filename format: volume_NNNN.xml
-                pattern = f"^{re.escape(volume)}_([0-9]{{4}})\\.xml$"
+                pattern = f"^UT[A-Z0-9]+_([0-9]{{4}})\\.xml$"
                 match = re.match(pattern, filename)
                 if not match:
-                    errors.append(f"File {filename} in volume {volume} does not follow naming pattern {volume}_NNNN.xml")
+                    errors.append(f"File {filename} in volume {volume} does not follow naming pattern UTXXX_NNNN.xml")
                     continue
                 
                 xml_files.append((filename, int(match.group(1))))
@@ -191,7 +202,7 @@ def validate_files(args):
                         xml_doc = etree.parse(filepath)
                         
                         # Find SRC_PATH elements
-                        src_paths = xml_doc.xpath("//tei:idno[@type='SRC_PATH']/text()", namespaces=ns)
+                        src_paths = xml_doc.xpath("//tei:idno[@type='src_path']/text()", namespaces=ns)
                         for src_path in src_paths:
                             full_src_path = os.path.join(sources_dir, src_path)
                             
@@ -201,7 +212,7 @@ def validate_files(args):
                                 continue
                             
                             # Get sha256 elements that are siblings to SRC_PATH
-                            xpath = f"//tei:idno[@type='SRC_PATH'][text()='{src_path}']/following-sibling::tei:idno[@type='sha256']/text()"
+                            xpath = f"//tei:idno[@type='src_path'][text()='{src_path}']/following-sibling::tei:idno[@type='src_sha256']/text()"
                             sha256_values = xml_doc.xpath(xpath, namespaces=ns)
                             
                             if not sha256_values:
@@ -226,14 +237,4 @@ def validate_files(args):
     
     # Function passes if there are no errors
     passed = len(errors) == 0
-    
-    logging.info("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
-    if warns:
-        logging.warn("Validation warnings:")
-        for warn in warns:
-            logging.warn("  "+warn)
-    if errors:
-        logging.error("Validation errors:")
-        for error in errors:
-            logging.error("  "+error)
     return passed, warns, errors
