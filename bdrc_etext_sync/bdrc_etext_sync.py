@@ -1,12 +1,14 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 
 import argparse
 import sys
 import logging
 import ocfl
-from .validation import validate_files_and_log
+from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
+from .buda_api import get_buda_AO_info
 from .es_utils import sync_id_to_es
 import re
+import os
 
 OCFL_ROOT = "/home/eroux/BUDA/softs/public-library-data-warehouse/acip/sungbum/archive/"
 OCFL_VERSION = "1.1"
@@ -88,24 +90,76 @@ def sync_files_s3(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
     return sync_id_to_s3(args.id, args.filesdir)
 
-def get_ie_info(ie_lname):
-    # TODO: implement
-    return {
-        "mw_lname": "MW1ER24",
-        "mw_root_lname": "MW1ER24",
-        "mw_root_lname": "MW1ER24",
-        "volname_to_volnum": {
-            "VE1ER1": 1
-        }
-    }
-
 def sync_to_es(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
-    ie_info = get_ie_info(args.id)
+    ie_info = get_buda_AO_info(args.id)
     if not ie_info:
         logger.error(f"could not find {args.id} in the database")
         return
     return sync_id_to_es(ie_info["mw_lname"], ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"])
+
+def get_batch_info(batch_dir, requires_version=False):
+    # Ensure batch_dir exists and is a directory
+    if not os.path.isdir(batch_dir):
+        raise ValueError(f"'{batch_dir}' is not a valid directory")
+    
+    # Get all entries in the batch directory
+    all_entries = os.listdir(batch_dir)
+    all_entries.sort()
+
+    res = []
+    for entry in all_entries:
+        if not os.path.isdir(os.path.join(batch_dir, entry)):
+            logging.warning(f"ignore file {entry}")
+            continue
+        if not entry.startswith("IE"):
+            logging.warning(f"ignore directory {entry}")
+            continue
+        if re.match(r'^(.+?)[-_]v(\d+)$', entry):
+            eid = match.group(1)
+            version = match.group(2)
+        else:
+            eid = entry
+            version = None
+            if requires_version:
+                logging.warning(f"ignore directory {entry} (lacks OCFL version indication)")
+                continue
+        res.append({
+            "path": os.path.join(batch_dir, entry),
+            "eid": eid,
+            "version": version
+            })
+    return res
+
+    
+    # Process each directory
+    for subdir_basename in ie_dirs:
+        subdir_path = os.path.join(batch_dir, subdir_basename)
+        
+        # Call the validate function (assuming it's defined elsewhere)
+        validate(subdir_basename, subdir_path)
+    
+    return len(ie_dirs)  # Return number of processed directories
+
+def validate_files_batch(args):
+    batch_infos = get_batch_info(args.batch_dir, requires_version=False)
+    nb_total = len(batch_infos)
+    logging.info(f"validate {nb_total} directories")
+    nb_passed = 0
+    for bi in batch_infos:
+        passed, warnings, errors = validate_files(bi["eid"], bi["path"])
+        bi["passed"] = passed
+        if passed:
+            nb_passed += 1
+        bi["warnings"] = warnings
+        bi["errors"] = errors
+        if errors:
+            for e in errors:
+                logging.error(e)
+    if nb_passed == nb_total:
+        logging.info(f"all {nb_passed} directories passed")
+    else:
+        logging.error(f"{nb_passed} / {nb_total} passed")
 
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
@@ -145,7 +199,12 @@ def main():
     validate_parser.add_argument('--id', type=validate_id, required=True, help='The ID to validate')
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
     validate_parser.set_defaults(func=validate_files_and_log)
-    
+
+    # Parser for the validate_files command
+    validate_parser = subparsers.add_parser('validate_files_batch', help='Validate files for a all folders in a directory')
+    validate_parser.add_argument('--batch_dir', required=True, help='The folder of the ID to validate')
+    validate_parser.set_defaults(func=validate_files_batch)
+
     # Parser for the sync command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
     sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')

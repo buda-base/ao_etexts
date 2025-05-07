@@ -75,7 +75,7 @@ def validate_files_and_log(args):
         for error in errors:
             logging.error("  "+error)
 
-def validate_files(args):
+def validate_files(eid, filesdir):
     """Validates files for a specific ID in the given directory.
     returns two values:
       passed (boolean)
@@ -87,9 +87,9 @@ def validate_files(args):
     
     # Catch exception in get_volumes
     try:
-        volume_names = get_volumes(args.id)
+        volume_names = get_volumes(eid)
     except Exception as e:
-        errors.append(f"Failed to get volume names: {str(e)}")
+        errors.append(f"Failed to get volume names for {eid}: {str(e)}")
         return False, warns, errors
     
     # Check if there's at least one volume
@@ -98,16 +98,16 @@ def validate_files(args):
         return False, warns, errors
     
     # Check if archive directory exists
-    archive_dir = os.path.join(args.filesdir, "archive")
+    archive_dir = os.path.join(filesdir, "archive")
     if not os.path.isdir(archive_dir):
-        errors.append(f"Required 'archive' directory not found in {args.filesdir}")
+        errors.append(f"Required 'archive' directory not found in {filesdir}")
         return False, warns, errors
     
     # Check if sources directory exists (optional)
-    sources_dir = os.path.join(args.filesdir, "sources")
+    sources_dir = os.path.join(filesdir, "sources")
     sources_exist = os.path.isdir(sources_dir)
     if not sources_exist:
-        warns.append(f"Optional 'sources' directory not found in {args.filesdir}")
+        warns.append(f"Optional 'sources' directory not found in {filesdir}")
     
     # Get all directories in archive folder
     archive_subdirs = [d for d in os.listdir(archive_dir) 
@@ -147,7 +147,7 @@ def validate_files(args):
                     continue
                 
                 # Check filename format: volume_NNNN.xml
-                pattern = f"^UT[A-Z0-9]+_([0-9]{{4}})\\.xml$"
+                pattern = f"^UT[A-Z_-0-9]+_([0-9]{{4}})\\.xml$"
                 match = re.match(pattern, filename)
                 if not match:
                     errors.append(f"File {filename} in volume {volume} does not follow naming pattern UTXXX_NNNN.xml")
