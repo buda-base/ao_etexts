@@ -52,8 +52,7 @@ def send_docs_to_es(docs_by_volume, ie):
     try:
         for vol_name, volume_docs in docs_by_volume.items():
             logging.info("sending %d documents in bulk" % len(volume_docs))
-            #if DEBUG:
-            if True:
+            if DEBUG:
                 print(json.dumps(volume_docs, indent=2, ensure_ascii=False))
             response = helpers.bulk(get_os_client(), volume_docs, max_retries=3, request_timeout=60)
     except:
@@ -70,7 +69,7 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
     
     # Check if the archive directory exists
     if not os.path.exists(archive_path):
-        print(f"Archive directory does not exist at {archive_path}")
+        logging.warning(f"Archive directory does not exist at {archive_path}")
         return
 
     # Iterate through all subdirectories in the archive directory
@@ -83,7 +82,7 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
             logging.error(f"Skip {vol_name} (no directory with that name under archive/)")
             continue
         
-        print(f"Processing volume: {vol_name}")
+        logging.info(f"Processing volume: {vol_name}")
         
         # Get all XML files in the current subdirectory
         xml_files = glob.glob(os.path.join(vol_path, "*.xml"))
@@ -112,6 +111,8 @@ def sync_id_to_es(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_versio
     docs_by_volume = get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum)
     if docs_by_volume:
         send_docs_to_es(docs_by_volume, ie_lname)
+    else:
+        logging.error(f"could not find any document for {ie_lname}")
 
 def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
     base_string, annotations, source_path = convert_tei_to_text(xml_file_path)
@@ -249,7 +250,6 @@ def convert_pages(text, annotations):
     page_annotations = []
     def repl_pb_marker(m, cstart):
         pname = m.group("pname")
-        cstart = cstart
         # don't replace the first one
         repl = "\n\n" if cstart > 0 else ""
         page_annotations.append({"pname": pname, "cstart": cstart + 2 if cstart > 0 else 0})
@@ -410,7 +410,7 @@ def convert_tei_to_text(xml_file_path):
     body = root.xpath('//tei:body', namespaces=namespaces)
         
     if not body:
-        print("No body element found in the TEI document", file=sys.stderr)
+        logging.error("No body element found in the TEI document", file=sys.stderr)
         return None
     
     # Create a deep copy of the body to avoid modifying the original tree
@@ -487,16 +487,20 @@ def convert_tei_to_text(xml_file_path):
         replace_element(lb, lb_marker)
         
     # Get the text content
-    xml_str = etree.tostring(body_copy, encoding="unicode", method="xml")
-
+    etree.cleanup_namespaces(body_copy, top_nsmap={None: "http://www.tei-c.org/ns/1.0"})
+    xml_str = etree.tostring(body_copy, encoding="unicode", method="xml", pretty_print=False)
+    
     # Simple substitutions
     xml_str = xml_str.replace("\uFEFF", "")
-    xml_str = re.sub(r'[\r\n\t ]*</?body>[\r\n\t ]*', "", xml_str) # this also normalizes spaces at the beginning and end
-    xml_str = re.sub(r'<text_marker>(.*?)</text_marker>', r'\1', xml_str)
-    xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str)
-    
+    # this also normalizes spaces at the beginning and end
+    xml_str = re.sub(r'[\r\n\t ]*</?(?:body|p)(?: +[^>]+)*>[\r\n\t ]*', "", xml_str, flags=re.DOTALL)
+    xml_str = re.sub(r'<text_marker>(.*?)</text_marker>', r'\1', xml_str, flags=re.DOTALL)
+    xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str, flags=re.DOTALL)
+
     annotations = {}
+    #print(debug_annotations(xml_str, annotations))
     xml_str = convert_pages(xml_str, annotations)
+    #print(debug_annotations(xml_str, annotations))
     xml_str = convert_hi(xml_str, annotations)
     xml_str = remove_other_markers(xml_str, annotations)
     xml_str = unescape_xml(xml_str, annotations)
@@ -517,9 +521,14 @@ def test_conversion():
       </teiHeader>
       <text>
         <body>
+          <pb n="122"/>
           <p>This is the first paragraph.<lb/>This is on a new line.</p>
           <pb n="123"/>
+          <lb/>
           This is on a new <random_tag/>page.
+          <lb/>
+          This is on a new line
+          <pb n="124"/>
           This <!-- comment to be removed -->starts a <hi render="small">highlight
           <note>This note should be removed.</note>
           Special characters: &lt;tag&gt; &amp; &quot;quoted&quot;
