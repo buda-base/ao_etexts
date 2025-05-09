@@ -278,7 +278,7 @@ def convert_hi(text, annotations):
         hi_annotations.append({"rend": rend, "cstart": m.start(), "cend": m.end()})
         repl = m.group('content')
         return repl
-    pat_str = r'(?P<ot><hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>'
+    pat_str = r'(?P<ot>(\n\s*)?<hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>(\n\s*)?'
     output = get_string(text, pat_str, repl_hi_marker, annotations)
     return output
 
@@ -441,27 +441,26 @@ def convert_tei_to_text(xml_file_path):
         replace_element(figure, text_element)
 
     for hi in body_copy.xpath('.//tei:hi', namespaces=namespaces):
-        render_val = hi.get('render')
-        if render_val:
-            # Create new element with the format hi_xxx
-            new_tag = etree.Element(f'hi_{render_val}')
-            # Copy the text content
-            new_tag.text = hi.text
-            # Copy all child elements
-            for child in hi:
-                new_tag.append(deepcopy(child))
-            # Copy any tail text
-            new_tag.tail = hi.tail
-            replace_element(hi, new_tag)
+        render_val = hi.get('rend')
+        if not render_val:
+            render_val = ""
+        # Create new element with the format hi_xxx
+        new_tag = etree.Element(f'hi_{render_val}')
+        # Copy the text content
+        new_tag.text = hi.text
+        # Copy all child elements
+        for child in hi:
+            new_tag.append(deepcopy(child))
+        # Copy any tail text
+        new_tag.tail = hi.tail
+        replace_element(hi, new_tag)
 
     # Process unclear/supplied elements - keep supplied text
     for unclear in body_copy.xpath('.//tei:unclear', namespaces=namespaces):
-        supplied = unclear.xpath('.//tei:supplied', namespaces=namespaces)
-        if supplied:
-            text = "".join(supplied[0].itertext())
-            text_element = etree.Element("text_marker")
-            text_element.text = text
-            replace_element(unclear, text_element)
+        text = "".join(unclear.itertext())
+        text_element = etree.Element("hi_unclear")
+        text_element.text = text
+        replace_element(unclear, text_element)
     
     # Process choice elements - use corr instead of orig
     for choice in body_copy.xpath('.//tei:choice', namespaces=namespaces):
@@ -494,7 +493,7 @@ def convert_tei_to_text(xml_file_path):
     xml_str = xml_str.replace("\uFEFF", "")
     # this also normalizes spaces at the beginning and end
     xml_str = re.sub(r'[\r\n\t ]*</?(?:body|p)(?: +[^>]+)*>[\r\n\t ]*', "", xml_str, flags=re.DOTALL)
-    xml_str = re.sub(r'<text_marker>(.*?)</text_marker>', r'\1', xml_str, flags=re.DOTALL)
+    xml_str = re.sub(r'(?:\n\s*)?<text_marker>(.*?)</text_marker>(?:\n\s*)?', r'\1', xml_str, flags=re.DOTALL)
     xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str, flags=re.DOTALL)
 
     annotations = {}
