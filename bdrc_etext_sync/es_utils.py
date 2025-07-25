@@ -12,6 +12,7 @@ import logging
 from opensearchpy import OpenSearch, helpers
 
 from .chunkers import TibetanEasyChunker
+from .buda_api import OutlineEtextLookup
 
 INDEX = "bdrc_prod"
 DEBUG = False
@@ -58,10 +59,20 @@ def send_docs_to_es(docs_by_volume, ie):
     except:
         logging.exception("The request to ES had an exception for " + ie)
 
-def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum):
+def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
     """
     """
     logging.info(f"get docs for {local_dir_path}")
+
+    oel = None
+    print(outline_lname)
+    if outline_lname:
+        try:
+            oel = OutlineEtextLookup(outline_lname, ie_lname)
+        except:
+            logging.exception("could not get outline for "+outline_lname)
+
+    print(oel)
     # Construct the path to the archive directory
     archive_path = os.path.join(local_dir_path, "archive")
 
@@ -95,7 +106,13 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
             logging.info(f"get doc for {xml_file_path}")
             # Extract just the filename without the path
             doc_name = os.path.basename(xml_file_path)
-            
+            mw_lname = mw_root_lname
+            if oel:
+                potential_mw = oel.get_mw_for(vol_num, doc_num+1)
+                print(potential_mw)
+                if potential_mw:
+                    mw_lname = potential_mw
+                    print(mw_lname)
             # Call the get_docs function
             doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
             if not doc:
@@ -107,8 +124,8 @@ def get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, vo
 
     return docs_by_volume
 
-def sync_id_to_es(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum):
-    docs_by_volume = get_docs(mw_lname, mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum)
+def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
+    docs_by_volume = get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname)
     if docs_by_volume:
         send_docs_to_es(docs_by_volume, ie_lname)
     else:
@@ -278,7 +295,8 @@ def convert_hi(text, annotations):
         hi_annotations.append({"rend": rend, "cstart": m.start(), "cend": m.end()})
         repl = m.group('content')
         return repl
-    pat_str = r'(?P<ot>(\n\s*)?<hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>(\n\s*)?'
+    # TODO: we should ignore previous / next characters if we're not in a xml:space="preserve" environment
+    pat_str = r'(?P<ot><hi_(?P<rend>[^>]+)>)(?P<content>.*?)</hi_(?P=rend)>'
     output = get_string(text, pat_str, repl_hi_marker, annotations)
     return output
 
@@ -377,6 +395,13 @@ def replace_element(old_element, new_element=None):
         parent.replace(old_element, new_element)
 
 def convert_tei_to_text(xml_file_path):
+    # Parse the XML file
+    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+    tree = etree.parse(xml_file_path, parser)
+    root = tree.getroot()
+    return convert_tei_root_to_text(root)
+
+def convert_tei_root_to_text(root):
     """
     Convert a TEI/XML file to plain text with the following rules:
     - Only content within the body tags is processed
@@ -391,16 +416,11 @@ def convert_tei_to_text(xml_file_path):
     - XML-encoded characters (&gt;, etc.) are converted to their normal representation
     
     Args:
-        xml_file_path: Path to the XML file
+        root: an etree root
         
     Returns:
         String containing the plain text representation
     """
-    # Parse the XML file
-    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
-    tree = etree.parse(xml_file_path, parser)
-    root = tree.getroot()
-    
     # Find the body element (handle TEI namespace if present)
     namespaces = {'tei': 'http://www.tei-c.org/ns/1.0'}
 

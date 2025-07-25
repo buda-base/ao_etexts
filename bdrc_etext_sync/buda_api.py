@@ -13,6 +13,7 @@ import json
 import logging
 
 LDSPDIBASEURL = "https://ldspdi.bdrc.io/"
+EDITSERVBASEURL = "https://editserv.bdrc.io/"
 CONVERTER = pyewts.pyewts()
 
 SESSION = boto3.Session()
@@ -189,6 +190,7 @@ def ao_res_from_model(g, rlname):
     rres = BDR[rlname]
     try:
         mwres = g.value(rres, BDO.instanceReproductionOf)
+        #print(g.serialize(format="ttl"))
         mwres_lname = to_lname(mwres)
         res["mw_lname"] = mwres_lname
         res["mw_root_lname"] = mwres_lname
@@ -240,8 +242,77 @@ def get_buda_AO_info(rlname):
     except Exception as e:
         logging.error("get_buda_AO_info failed for "+rlname+": "+str(e))
     finally:
-        print(res )
         return res
+
+def get_outline_graph(olname):
+    g = rdflib.Graph()
+    try:
+        req = requests.get(
+            LDSPDIBASEURL + "graph/"+olname+".ttl",
+            headers={"Accept": "text/turtle"}
+        )
+        g.parse(data=req.text, format="ttl")
+        res = ao_res_from_model(g, rlname)
+    except:
+        logging.exception("get_outline_graph failed for "+olname+": "+str(e))
+        g = None
+    finally:
+        return g
+
+class OutlineEtextLookup:
+
+    def __init__(self, olname, ielname):
+        self.cls = []
+        g = get_outline_graph(olname)
+        if not g:
+            logging.warning("no g")
+            return
+        for cl, _, _ in g.triples((None, BDO.contentLocationInstance, BDR[ielname])):
+            mw = g.value(None, BDO.contentLocation, cl)
+            mw_lname = to_lname(mw)
+            volnum_start = g.value(cl, BDO.contentLocationVolume, None)
+            if volnum_start:
+                volnum_start = int(volnum_start)
+            else:
+                logging.warning("content location with no volume start, ignoring")
+            volnum_end = g.value(cl, BDO.contentLocationEndVolume, None)
+            if volnum_end:
+                volnum_end = int(volnum_end)
+            else:
+                volnum_end = volnum_start
+            etextnum_start = g.value(cl, BDO.contentLocationEtext, None)
+            if etextnum_start:
+                etextnum_start = int(etextnum_start)
+            etextnum_end = g.value(cl, BDO.contentLocationEndEtext, None)
+            if etextnum_end:
+                etextnum_end = int(etextnum_end)
+            else:
+                etextnum_end = etextnum_start
+            self.cls.append({"mw": mw_lname, "vnum_start": volnum_start, "vnum_end": volnum_end, "etextnum_start": etextnum_start, "etextnum_end": etextnum_end})
+        print(self.cls)
+        
+    def get_cls_for(self, vnum, etextnum):
+        res = []
+        for cl in self.cls:
+            if vnum == cl["vnum_end"] and vnum != cl["vnum_start"] and (not cl["etextnum_end"] or cl["etextnum_end"] >= etextnum):
+                res.append(cl)
+            elif vnum == cl["vnum_start"] and vnum != cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum):
+                res.append(cl)
+            elif vnum == cl["vnum_start"] and vnum == cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum and cl["etextnum_end"] >= etextnum): 
+                res.append(cl)
+            elif vnum < cl["vnum_end"] and vnum > cl["vnum_start"]:
+                res.append(cl)
+        return res
+
+    def get_mw_for(self, vnum, etextnum):
+        """
+        TODO: this should be redone, it currently only works for very simple cases
+        """
+        cl_list = self.get_cls_for(vnum, etextnum)
+        print(cl_list)
+        if not cl_list:
+            return None
+        return cl_list[0]["mw"]
 
 class OutlinePageLookup:
     """
@@ -357,3 +428,29 @@ def image_group_to_folder_name(scan_id, image_group_id):
     if pre == "I" and rest.isdigit() and len(rest) == 4:
         image_group_folder_part = rest
     return scan_id+"-"+image_group_folder_part
+
+def send_sync_notification(ie_lname, ie_info):
+    """
+    sends the sync notification to editserv. ie_info is expected to have the following format:
+
+    {
+        "remove_others": bool,
+        "volumes": {
+            "VEXX": {
+                "UTXX": {
+                    "nb_pages": x, (can be None)
+                    "nb_characters": x,
+                    "etext_num": x
+                }
+            }
+        }
+    }
+    """
+    try:
+        req = requests.post(
+            EDITSERVBASEURL + "/notifyetextsync/bdr:{ie_lname}",
+            params=params,
+            json=ie_info
+        )
+    except Exception as e:
+        logging.exception("send_sync_notification failed for "+ie_lname)

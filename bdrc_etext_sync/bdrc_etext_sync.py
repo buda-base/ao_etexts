@@ -5,16 +5,19 @@ import logging
 import ocfl
 from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
-from .buda_api import get_buda_AO_info
-from .es_utils import sync_id_to_es
+from .buda_api import get_buda_AO_info, send_sync_notification
+from .es_utils import sync_id_to_es, convert_tei_root_to_text
 import re
+from pathlib import Path
+from natsort import natsorted
 import os
+import xml.etree.ElementTree as ET
 
-OCFL_ROOT = "/home/eroux/BUDA/softs/public-library-data-warehouse/acip/sungbum/archive/"
+OCFL_ROOT = os.environ['OCFL_ROOT']
 OCFL_VERSION = "1.1"
 OCFL_DIGEST = "sha256"
 OCFL_PATH_NORM = "uri"
-COMMIT_USER = "BDRC sync agent"
+COMMIT_USER = "BDRC etext sync agent"
 COMMIT_MESSAGE = None
 
 def validate_version(version):
@@ -44,7 +47,11 @@ def to_ocfl_id(id_s):
     raise "unable to parse id "+id_s
 
 def sync_files_archive(args):
-    """Synchronizes files for a specific ID with the given directory."""
+    """
+    Synchronizes files for a specific ID with the given directory.
+
+    Returns the head version of the ocfl object in the archive after the operation.
+    """
     srcdir = args.filesdir
     if not os.path.isdir(srcdir):
         raise "not a directory: "+srcdir
@@ -76,15 +83,57 @@ def sync_files_archive(args):
                                     message=COMMIT_MESSAGE,
                                     name=COMMIT_USER,
                                     address=None)
+    new_version = "v1"
     if create:
         obj.create(srcdir=srcdir,
                    metadata=metadata,
                    objdir=args.objdir)
     else:
-        obj.add_version_with_content(objdir=args.objdir,
-                                           srcdir=srcdir,
-                                           metadata=metadata)
-    logging.info(f"Synced files for ID: {args.id} from directory: {args.filesdir}")
+        inventory = self.parse_inventory()
+        new_inventory = obj.add_version_with_content(objdir=args.objdir,
+                                   srcdir=srcdir,
+                                   metadata=metadata,
+                                   abort_if_no_difference=True)
+        if new_inventory:
+            new_version = new_inventory.head
+        else:
+            new_version = inventory.head
+    logging.info(f"Synced files for {args.id} from directory: {args.filesdir}, ocfl version in archive: {new_version}")
+    return new_version
+
+def get_ut_info(xml_path):
+    # Parse the XML file
+    tree = ET.parse(xml_file_path)
+    root = tree.getroot()
+    
+    # Define the TEI namespace
+    namespace = {'tei': 'http://www.tei-c.org/ns/1.0'}
+    
+    # Find all pb elements using the namespace
+    nb_pages = len(root.findall('.//tei:pb', namespace))
+    nb_characters = len(convert_tei_root_to_text(root))
+    return nb_pages, nb_characters
+
+def notify_sync(ie_lname, srcdir):
+    notification_info = { "remove_others": True, "volumes": {} }
+    base_path = Path(base_path) / "archive"
+    
+    # Walk through all subdirectories
+    for volume_dir in base_path.iterdir():
+        if volume_dir.is_dir() and volume_dir.name.startswith('VE'):
+            volume_name = volume_dir.name
+            notification_info["volumes"][volume_name] = {}
+            
+            # Process XML files in this volume directory
+            xml_files = volume_dir.glob('*.xml')
+            for xml_file in xml_files:
+                ut_name = xml_file.stem  # filename without extension
+                etext_num = int(ut_name[-4:])
+                xml_path = str(xml_file)
+                nb_pages, nb_characters = get_ut_info(xml_path)
+                # Get the etext info for this XML file
+                notification_info["volumes"][volume_name][ut_name] = { "etext_num": etext_num, "nb_pages": nb_pages, "nb_characters": nb_characters }    
+    send_sync_notification(ie_lname, notification_info)
 
 def sync_files_s3(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
@@ -96,7 +145,7 @@ def sync_to_es(args):
     if not ie_info:
         logger.error(f"could not find {args.id} in the database")
         return
-    return sync_id_to_es(ie_info["mw_lname"], ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"])
+    return sync_id_to_es(ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"])
 
 def get_batch_info(batch_dir, requires_version=False):
     # Ensure batch_dir exists and is a directory
@@ -205,13 +254,19 @@ def main():
     validate_parser.add_argument('--batch_dir', required=True, help='The folder of the ID to validate')
     validate_parser.set_defaults(func=validate_files_batch)
 
-    # Parser for the sync command
+    # Parser for the sync_archive command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
     sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
     sync_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_parser.set_defaults(func=sync_files_archive)
 
     # Parser for the sync command
+    sync_parser = subparsers.add_parser('notify_sync', help='Send sync notification for files in a directory')
+    sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to send notification for')
+    sync_parser.add_argument('--filesdir', required=True, help='Directory of files')
+    sync_parser.set_defaults(func=notify_sync)
+
+    # Parser for the sync_s3 command
     sync_s3_parser = subparsers.add_parser('sync_s3', help='Synchronize files to s3 for a specific ID')
     sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
     sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')

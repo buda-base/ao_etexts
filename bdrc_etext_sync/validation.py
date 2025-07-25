@@ -64,8 +64,8 @@ def get_volumes(ie_lname):
 
 def validate_files_and_log(args):
     logging.info(f"Validating files for ID: {args.id} in directory: {args.filesdir}")
-    passed, warns, errors = validate_files(args)
-    logging.warn("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
+    passed, warns, errors = validate_files(args.id, args.filesdir)
+    logging.info("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
     if warns:
         logging.warn("Validation warnings:")
         for warn in warns:
@@ -147,7 +147,7 @@ def validate_files(eid, filesdir):
                     continue
                 
                 # Check filename format: volume_NNNN.xml
-                pattern = f"^UT[A-Z_-0-9]+_([0-9]{{4}})\\.xml$"
+                pattern = r"^UT[A-Z_\-0-9]+_([0-9]{4})\.xml$"
                 match = re.match(pattern, filename)
                 if not match:
                     errors.append(f"File {filename} in volume {volume} does not follow naming pattern UTXXX_NNNN.xml")
