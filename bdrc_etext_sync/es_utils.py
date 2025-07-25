@@ -55,6 +55,8 @@ def send_docs_to_es(docs_by_volume, ie):
             logging.info("sending %d documents in bulk" % len(volume_docs))
             if DEBUG:
                 print(json.dumps(volume_docs, indent=2, ensure_ascii=False))
+            for doc in volume_docs:
+                logging.info("send %s" % doc["_id"])
             response = helpers.bulk(get_os_client(), volume_docs, max_retries=3, request_timeout=60)
     except:
         logging.exception("The request to ES had an exception for " + ie)
@@ -65,14 +67,12 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
     logging.info(f"get docs for {local_dir_path}")
 
     oel = None
-    print(outline_lname)
     if outline_lname:
         try:
             oel = OutlineEtextLookup(outline_lname, ie_lname)
         except:
             logging.exception("could not get outline for "+outline_lname)
 
-    print(oel)
     # Construct the path to the archive directory
     archive_path = os.path.join(local_dir_path, "archive")
 
@@ -105,14 +105,12 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         for doc_num, xml_file_path in enumerate(xml_files):
             logging.info(f"get doc for {xml_file_path}")
             # Extract just the filename without the path
-            doc_name = os.path.basename(xml_file_path)
+            doc_name = os.path.basename(xml_file_path)[:-4]
             mw_lname = mw_root_lname
             if oel:
                 potential_mw = oel.get_mw_for(vol_num, doc_num+1)
-                print(potential_mw)
                 if potential_mw:
                     mw_lname = potential_mw
-                    print(mw_lname)
             # Call the get_docs function
             doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
             if not doc:
