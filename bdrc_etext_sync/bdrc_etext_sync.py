@@ -14,11 +14,23 @@ import os
 import xml.etree.ElementTree as ET
 
 OCFL_ROOT = os.environ['OCFL_ROOT']
+if not OCFL_ROOT.endswith("/"):
+    OCFL_ROOT += "/"
 OCFL_VERSION = "1.1"
 OCFL_DIGEST = "sha256"
 OCFL_PATH_NORM = "uri"
 COMMIT_USER = "BDRC etext sync agent"
 COMMIT_MESSAGE = None
+
+OCFL_INIT = False
+def ensure_ocfl_init():
+    global OCFL_INIT
+    if OCFL_INIT:
+        return
+    from ocfl.layout_registry import register_layout
+    from .ocfl_layout_bdrc_etexts import Layout_BDRC_etexts
+    register_layout("bdrc_etexts", Layout_BDRC_etexts)
+    OCFL_INIT = True
 
 def validate_version(version):
     """Validates the version format. Must be 'head' or 'v' followed by digits."""
@@ -52,12 +64,13 @@ def sync_files_archive(args):
 
     Returns the head version of the ocfl object in the archive after the operation.
     """
+    ensure_ocfl_init()
     srcdir = args.filesdir
     if not os.path.isdir(srcdir):
         raise "not a directory: "+srcdir
     store = ocfl.StorageRoot(root=OCFL_ROOT)
     ocfl_id = to_ocfl_id(args.id)
-    objdir = store.object_path(ocfl_id)
+    objdir = OCFL_ROOT + store.object_path(ocfl_id)
     obj = ocfl.Object(identifier=ocfl_id,
                   spec_version=OCFL_VERSION,
                   digest_algorithm=OCFL_DIGEST,
@@ -87,10 +100,11 @@ def sync_files_archive(args):
     if create:
         obj.create(srcdir=srcdir,
                    metadata=metadata,
-                   objdir=args.objdir)
+                   objdir=objdir)
     else:
-        inventory = self.parse_inventory()
-        new_inventory = obj.add_version_with_content(objdir=args.objdir,
+        obj.open_obj_fs(objdir)
+        inventory = obj.parse_inventory()
+        new_inventory = obj.add_version_with_content(objdir=objdir,
                                    srcdir=srcdir,
                                    metadata=metadata,
                                    abort_if_no_difference=True)
@@ -212,6 +226,7 @@ def validate_files_batch(args):
 
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
+    ensure_ocfl_init()
     dstdir = args.filesdir
     if os.path.isdir(dstdir):
         raise "directory already exists: "+dstdir

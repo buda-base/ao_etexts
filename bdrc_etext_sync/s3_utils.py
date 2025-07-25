@@ -4,6 +4,7 @@ import boto3
 from botocore.exceptions import ClientError
 import logging
 import hashlib
+import base64
 
 S3_BUCKET_NAME = "etexts.bdrc.io"
 
@@ -86,7 +87,7 @@ def sync_directory_to_s3(local_dir_path, bucket_name, prefix):
                 with open(local_file_path, 'rb') as f:
                     for byte_block in iter(lambda: f.read(4096), b""):
                         sha256_hash.update(byte_block)
-                checksum = sha256_hash.hexdigest()
+                checksum = base64.b64encode(sha256_hash.digest()).decode('utf-8')
                 
                 # Upload the file with the checksum
                 logger.info(f"Uploading {local_file_path} to s3://{bucket_name}/{s3_key}")
