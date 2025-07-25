@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from natsort import natsorted
 import os
-import xml.etree.ElementTree as ET
+from lxml import etree
 
 OCFL_ROOT = os.environ['OCFL_ROOT']
 if not OCFL_ROOT.endswith("/"):
@@ -115,9 +115,11 @@ def sync_files_archive(args):
     logging.info(f"Synced files for {args.id} from directory: {args.filesdir}, ocfl version in archive: {new_version}")
     return new_version
 
-def get_ut_info(xml_path):
+def get_ut_info(xml_file_path):
     # Parse the XML file
-    tree = ET.parse(xml_file_path)
+
+    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+    tree = etree.parse(xml_file_path, parser)
     root = tree.getroot()
     
     # Define the TEI namespace
@@ -125,12 +127,13 @@ def get_ut_info(xml_path):
     
     # Find all pb elements using the namespace
     nb_pages = len(root.findall('.//tei:pb', namespace))
-    nb_characters = len(convert_tei_root_to_text(root))
-    return nb_pages, nb_characters
+    plain_txt, annotations, src_path = convert_tei_root_to_text(root)
+    nb_characters = len(plain_txt)
+    return nb_pages, nb_characters, src_path
 
-def notify_sync(ie_lname, srcdir):
-    notification_info = { "remove_others": True, "volumes": {} }
-    base_path = Path(base_path) / "archive"
+def notify_sync(args):
+    notification_info = { "ocfl_version": args.version, "volumes": {} }
+    base_path = Path(args.filesdir) / "archive"
     
     # Walk through all subdirectories
     for volume_dir in base_path.iterdir():
@@ -144,10 +147,10 @@ def notify_sync(ie_lname, srcdir):
                 ut_name = xml_file.stem  # filename without extension
                 etext_num = int(ut_name[-4:])
                 xml_path = str(xml_file)
-                nb_pages, nb_characters = get_ut_info(xml_path)
+                nb_pages, nb_characters, src_path = get_ut_info(xml_path)
                 # Get the etext info for this XML file
-                notification_info["volumes"][volume_name][ut_name] = { "etext_num": etext_num, "nb_pages": nb_pages, "nb_characters": nb_characters }    
-    send_sync_notification(ie_lname, notification_info)
+                notification_info["volumes"][volume_name][ut_name] = { "etext_num": etext_num, "nb_pages": nb_pages, "nb_characters": nb_characters, "src_path": src_path }
+    send_sync_notification(args.id, notification_info)
 
 def sync_files_s3(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
@@ -279,6 +282,7 @@ def main():
     sync_parser = subparsers.add_parser('notify_sync', help='Send sync notification for files in a directory')
     sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to send notification for')
     sync_parser.add_argument('--filesdir', required=True, help='Directory of files')
+    sync_parser.add_argument('--version', required=True, help='OCFL version')
     sync_parser.set_defaults(func=notify_sync)
 
     # Parser for the sync_s3 command

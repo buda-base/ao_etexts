@@ -434,22 +434,24 @@ def send_sync_notification(ie_lname, ie_info):
     sends the sync notification to editserv. ie_info is expected to have the following format:
 
     {
-        "remove_others": bool,
+        "ocfl_version": "v1",
         "volumes": {
             "VEXX": {
                 "UTXX": {
                     "nb_pages": x, (can be None)
                     "nb_characters": x,
-                    "etext_num": x
+                    "etext_num": x,
+                    "src_path": "path relative to the sources/ directory in the archive"
                 }
             }
         }
     }
     """
+    logging.info(ie_info)
+    url = EDITSERVBASEURL + f"/notifyetextsync/bdr:{ie_lname}"
+    logging.info(f"send sync notification request to {url}")
     try:
-        req = requests.post(
-            EDITSERVBASEURL + "/notifyetextsync/bdr:{ie_lname}",
-            params=params,
+        req = requests.post(url,
             json=ie_info
         )
     except Exception as e:

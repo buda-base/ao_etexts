@@ -416,13 +416,15 @@ def convert_tei_root_to_text(root):
     Args:
         root: an etree root
         
-    Returns:
+    Returns 3 values:
         String containing the plain text representation
+        a dict representing the annotations
+        the path of the source file
     """
     # Find the body element (handle TEI namespace if present)
     namespaces = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
-    source_path = root.xpath('//tei:idno[@type="SRC_PATH"]/text()', namespaces=namespaces)
+    source_path = root.xpath('//tei:idno[@type="src_path"]/text()', namespaces=namespaces)
     source_path = source_path[0] if source_path else None
 
     body = root.xpath('//tei:body', namespaces=namespaces)
