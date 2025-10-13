@@ -5,14 +5,15 @@ import html
 import re
 from bisect import bisect
 import os
-import glob
 import json
 import logging
+import fs.path
 
 from opensearchpy import OpenSearch, helpers
 
 from .chunkers import TibetanEasyChunker
 from .buda_api import OutlineEtextLookup
+from .fs_utils import open_filesystem
 
 INDEX = "bdrc_prod"
 DEBUG = False
@@ -63,6 +64,15 @@ def send_docs_to_es(docs_by_volume, ie):
 
 def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
     """
+    Get documents from a local or S3 path.
+    
+    Args:
+        mw_root_lname: Master work root local name
+        ie_lname: Instance etext local name
+        local_dir_path: Path or URL to the directory (can be local path or S3 URL)
+        ocfl_version: OCFL version
+        volname_to_volnum: Mapping of volume names to numbers
+        outline_lname: Outline local name
     """
     logging.info(f"get docs for {local_dir_path}")
 
@@ -73,30 +83,37 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         except:
             logging.exception("could not get outline for "+outline_lname)
 
+    # Open the filesystem
+    base_fs = open_filesystem(local_dir_path)
+    
     # Construct the path to the archive directory
-    archive_path = os.path.join(local_dir_path, "archive")
+    archive_path = "archive"
 
     docs_by_volume = {}
     
     # Check if the archive directory exists
-    if not os.path.exists(archive_path):
+    if not base_fs.exists(archive_path):
         logging.warning(f"Archive directory does not exist at {archive_path}")
+        base_fs.close()
         return
 
     # Iterate through all subdirectories in the archive directory
     for vol_name, vol_num in volname_to_volnum.items():
 
-        vol_path = os.path.join(archive_path, vol_name)
+        vol_path = fs.path.join(archive_path, vol_name)
         
         # Skip if not a directory
-        if not os.path.isdir(vol_path):
+        if not base_fs.isdir(vol_path):
             logging.error(f"Skip {vol_name} (no directory with that name under archive/)")
             continue
         
         logging.info(f"Processing volume: {vol_name}")
         
         # Get all XML files in the current subdirectory
-        xml_files = glob.glob(os.path.join(vol_path, "*.xml"))
+        xml_files = []
+        for filename in base_fs.listdir(vol_path):
+            if filename.endswith('.xml'):
+                xml_files.append(fs.path.join(vol_path, filename))
         
         # Sort the XML files alphabetically
         xml_files.sort()
@@ -105,14 +122,15 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         for doc_num, xml_file_path in enumerate(xml_files):
             logging.info(f"get doc for {xml_file_path}")
             # Extract just the filename without the path
-            doc_name = os.path.basename(xml_file_path)[:-4]
+            doc_name = fs.path.basename(xml_file_path)[:-4]
             mw_lname = mw_root_lname
             if oel:
                 potential_mw = oel.get_mw_for(vol_num, doc_num+1)
                 if potential_mw:
                     mw_lname = potential_mw
-            # Call the get_docs function
-            doc = get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
+            # Call the get_docs function - read XML content from filesystem
+            with base_fs.open(xml_file_path, 'rb') as xml_file:
+                doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
             if not doc:
                 logging.error(f"could not convert {doc_name}")
                 continue
@@ -120,6 +138,7 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
                 docs_by_volume[vol_name] = []
             docs_by_volume[vol_name].append(doc)
 
+    base_fs.close()
     return docs_by_volume
 
 def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
@@ -130,7 +149,20 @@ def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname
         logging.error(f"could not find any document for {ie_lname}")
 
 def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+    """Get doc from a file path (legacy function for backward compatibility)."""
     base_string, annotations, source_path = convert_tei_to_text(xml_file_path)
+    return _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname)
+
+def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+    """Get doc from file content (file-like object)."""
+    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+    tree = etree.parse(xml_file_content, parser)
+    root = tree.getroot()
+    base_string, annotations, source_path = convert_tei_root_to_text(root)
+    return _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname)
+
+def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+    """Build the etext document structure."""
     etext_doc = {}
     etext_doc["_id"] = doc_name
     etext_doc["_index"] = INDEX
