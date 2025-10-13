@@ -6,12 +6,13 @@ import ocfl
 from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
 from .buda_api import get_buda_AO_info, send_sync_notification
-from .es_utils import sync_id_to_es, convert_tei_root_to_text
+from .es_utils import sync_id_to_es, convert_tei_root_to_text, remove_previous_etext_es
 import re
 from pathlib import Path
 from natsort import natsorted
 import os
 from lxml import etree
+import copy
 
 OCFL_ROOT = os.environ['OCFL_ROOT']
 if not OCFL_ROOT.endswith("/"):
@@ -36,17 +37,17 @@ def validate_version(version):
     """Validates the version format. Must be 'head' or 'v' followed by digits."""
     if version == "head":
         return version
-    
+
     if not re.match(r'^v\d+$', version):
         raise argparse.ArgumentTypeError("Version must be 'head' or 'v' followed by digits (e.g., v1, v2, v10)")
-    
+
     return version
 
 def validate_id(id_s):
     """Validates the version format. Must be 'head' or 'v' followed by digits."""
     if not re.match(r'^IE\d[A-Z0-9_]+$', id_s):
         raise argparse.ArgumentTypeError("id must be in the form IE then a digit, then upper case letters and digits")
-    
+
     return id_s
 
 def to_ocfl_id(id_s):
@@ -56,7 +57,36 @@ def to_ocfl_id(id_s):
         return "http://purl.bdrc.io/resource/"+id_s[4:]
     elif id_s.startswith("http://purl.bdrc.io/resource/IE"):
         return id_s
-    raise "unable to parse id "+id_s
+    raise Exception("unable to parse id "+id_s)
+
+def read_ids_from_file(path):
+    """Read an id list file (one id per line). Ignores blank lines and whitespace."""
+    ids = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            # ignore pure comments lines if present
+            if s.startswith("#"):
+                continue
+            ids.append(validate_id(s))
+    return ids
+
+def for_each_id(args, callback):
+    """Call callback(args) for each id specified via --id or --idlistpath.
+    When iterating, we copy args and set .id accordingly.
+    """
+    if getattr(args, "idlistpath", None):
+        ids = read_ids_from_file(args.idlistpath)
+    else:
+        ids = [args.id]
+    last_result = None
+    for eid in ids:
+        a = copy.copy(args)
+        a.id = eid
+        last_result = callback(a)
+    return last_result
 
 def sync_files_archive(args):
     """
@@ -67,7 +97,7 @@ def sync_files_archive(args):
     ensure_ocfl_init()
     srcdir = args.filesdir
     if not os.path.isdir(srcdir):
-        raise "not a directory: "+srcdir
+        raise Exception("not a directory: "+srcdir)
     store = ocfl.StorageRoot(root=OCFL_ROOT)
     ocfl_id = to_ocfl_id(args.id)
     objdir = OCFL_ROOT + store.object_path(ocfl_id)
@@ -81,7 +111,7 @@ def sync_files_archive(args):
                   fixity=None)
     create = True
     if os.path.isfile(objdir):
-        raise "error: "+objdir+" is a file, should be a directory"
+        raise Exception("error: "+objdir+" is a file, should be a directory")
     if os.path.isdir(objdir):
         # if the object directory exists, make sure it is a valid OCFL object
         logging.info("validating previous version of object in "+objdir)
@@ -90,7 +120,7 @@ def sync_files_archive(args):
                                      log_errors=True,
                                      check_digests=True)
         if not passed:
-            raise "invalid OCFL object in "+objdir
+            raise Exception("invalid OCFL object in "+objdir)
         create = False
     metadata = ocfl.VersionMetadata(created=None,
                                     message=COMMIT_MESSAGE,
@@ -121,10 +151,10 @@ def get_ut_info(xml_file_path):
     parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
     tree = etree.parse(xml_file_path, parser)
     root = tree.getroot()
-    
+
     # Define the TEI namespace
     namespace = {'tei': 'http://www.tei-c.org/ns/1.0'}
-    
+
     # Find all pb elements using the namespace
     nb_pages = len(root.findall('.//tei:pb', namespace))
     plain_txt, annotations, src_path = convert_tei_root_to_text(root)
@@ -134,13 +164,13 @@ def get_ut_info(xml_file_path):
 def notify_sync(args):
     notification_info = { "ocfl_version": args.version, "volumes": {} }
     base_path = Path(args.filesdir) / "archive"
-    
+
     # Walk through all subdirectories
     for volume_dir in base_path.iterdir():
         if volume_dir.is_dir() and volume_dir.name.startswith('VE'):
             volume_name = volume_dir.name
             notification_info["volumes"][volume_name] = {}
-            
+
             # Process XML files in this volume directory
             xml_files = volume_dir.glob('*.xml')
             for xml_file in xml_files:
@@ -160,15 +190,20 @@ def sync_to_es(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
     ie_info = get_buda_AO_info(args.id)
     if not ie_info:
-        logger.error(f"could not find {args.id} in the database")
+        logging.error(f"could not find {args.id} in the database")
         return
     return sync_id_to_es(ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"])
+
+def delete_es(args):
+    """Remove previous eText index in ElasticSearch for this/these id(s)."""
+    logging.info(f"Deleting previous eText index for {args.id}")
+    return remove_previous_etext_es(args.id)
 
 def get_batch_info(batch_dir, requires_version=False):
     # Ensure batch_dir exists and is a directory
     if not os.path.isdir(batch_dir):
         raise ValueError(f"'{batch_dir}' is not a valid directory")
-    
+
     # Get all entries in the batch directory
     all_entries = os.listdir(batch_dir)
     all_entries.sort()
@@ -181,7 +216,8 @@ def get_batch_info(batch_dir, requires_version=False):
         if not entry.startswith("IE"):
             logging.warning(f"ignore directory {entry}")
             continue
-        if re.match(r'^(.+?)[-_]v(\d+)$', entry):
+        match = re.match(r'^(.+?)[-_]v(\d+)$', entry)
+        if match:
             eid = match.group(1)
             version = match.group(2)
         else:
@@ -197,14 +233,14 @@ def get_batch_info(batch_dir, requires_version=False):
             })
     return res
 
-    
+
     # Process each directory
     for subdir_basename in ie_dirs:
         subdir_path = os.path.join(batch_dir, subdir_basename)
-        
+
         # Call the validate function (assuming it's defined elsewhere)
         validate(subdir_basename, subdir_path)
-    
+
     return len(ie_dirs)  # Return number of processed directories
 
 def validate_files_batch(args):
@@ -232,12 +268,12 @@ def get_archive_files(args):
     ensure_ocfl_init()
     dstdir = args.filesdir
     if os.path.isdir(dstdir):
-        raise "directory already exists: "+dstdir
+        raise Exception("directory already exists: "+dstdir)
     store = ocfl.StorageRoot(root=OCFL_ROOT)
     ocfl_id = to_ocfl_id(args.id)
     objdir = store.object_path(ocfl_id)
     if not os.path.isdir(objdir):
-        raise "object does not exist in "+objdir
+        raise Exception("object does not exist in "+objdir)
     obj = ocfl.Object(identifier=ocfl_id,
                   spec_version=OCFL_VERSION,
                   digest_algorithm=OCFL_DIGEST,
@@ -253,61 +289,72 @@ def get_archive_files(args):
     if args.version == "head":
         extracted_version += " (head)"
     logging.info(f"Extracted archive files for ID: {args.id}, version {extracted_version} to directory: {args.filesdir}")
-     
+
+def _add_id_or_idlist_arg(p):
+    """Utility: add mutually exclusive --id and --idlistpath to a subparser."""
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument('--id', type=validate_id, help='The ID to target')
+    g.add_argument('--idlistpath', help='Path to a file with one ID per line (blank lines ignored)')
+    return p
 
 def main():
     # Create the top-level parser
     parser = argparse.ArgumentParser(prog='bdrc_etext_sync', description='BDRC eText management tool')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     subparsers.required = True
-    
-    # Parser for the validate_files command
-    validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
-    validate_parser.add_argument('--id', type=validate_id, required=True, help='The ID to validate')
-    validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
-    validate_parser.set_defaults(func=validate_files_and_log)
 
     # Parser for the validate_files command
-    validate_parser = subparsers.add_parser('validate_files_batch', help='Validate files for a all folders in a directory')
-    validate_parser.add_argument('--batch_dir', required=True, help='The folder of the ID to validate')
-    validate_parser.set_defaults(func=validate_files_batch)
+    validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
+    _add_id_or_idlist_arg(validate_parser)
+    validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
+    validate_parser.set_defaults(func=lambda a: for_each_id(a, validate_files_and_log))
+
+    # Parser for the validate_files_batch command
+    validate_batch_parser = subparsers.add_parser('validate_files_batch', help='Validate files for all folders in a directory')
+    validate_batch_parser.add_argument('--batch_dir', required=True, help='The folder containing the IDs to validate')
+    validate_batch_parser.set_defaults(func=validate_files_batch)
 
     # Parser for the sync_archive command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
-    sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
+    _add_id_or_idlist_arg(sync_parser)
     sync_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
-    sync_parser.set_defaults(func=sync_files_archive)
+    sync_parser.set_defaults(func=lambda a: for_each_id(a, sync_files_archive))
 
-    # Parser for the sync command
-    sync_parser = subparsers.add_parser('notify_sync', help='Send sync notification for files in a directory')
-    sync_parser.add_argument('--id', type=validate_id, required=True, help='The ID to send notification for')
-    sync_parser.add_argument('--filesdir', required=True, help='Directory of files')
-    sync_parser.add_argument('--version', required=True, help='OCFL version')
-    sync_parser.set_defaults(func=notify_sync)
+    # Parser for the notify_sync command
+    notify_parser = subparsers.add_parser('notify_sync', help='Send sync notification for files in a directory')
+    _add_id_or_idlist_arg(notify_parser)
+    notify_parser.add_argument('--filesdir', required=True, help='Directory of files')
+    notify_parser.add_argument('--version', required=True, help='OCFL version')
+    notify_parser.set_defaults(func=lambda a: for_each_id(a, notify_sync))
 
     # Parser for the sync_s3 command
     sync_s3_parser = subparsers.add_parser('sync_s3', help='Synchronize files to s3 for a specific ID')
-    sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
+    _add_id_or_idlist_arg(sync_s3_parser)
     sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
-    sync_s3_parser.set_defaults(func=sync_files_s3)
+    sync_s3_parser.set_defaults(func=lambda a: for_each_id(a, sync_files_s3))
 
-    # Parser for the sync command
-    sync_s3_parser = subparsers.add_parser('sync_es', help='Synchronize files to ElasticSearch for a specific ID and path')
-    sync_s3_parser.add_argument('--id', type=validate_id, required=True, help='The ID to synchronize')
-    sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
-    sync_s3_parser.add_argument('--version', required=True, type=validate_version, help='OCFL version of the files')
-    sync_s3_parser.set_defaults(func=sync_to_es)
+    # Parser for the sync_es command
+    sync_es_parser = subparsers.add_parser('sync_es', help='Synchronize files to ElasticSearch for a specific ID and path')
+    _add_id_or_idlist_arg(sync_es_parser)
+    sync_es_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
+    sync_es_parser.add_argument('--version', required=True, type=validate_version, help='OCFL version of the files')
+    sync_es_parser.set_defaults(func=lambda a: for_each_id(a, sync_to_es))
+
+    delete_es_parser = subparsers.add_parser('delete_es', help='Delete previous eText index in ElasticSearch for ID(s)')
+    _add_id_or_idlist_arg(delete_es_parser)
+    delete_es_parser.set_defaults(func=lambda a: for_each_id(a, delete_es))
 
     # Parser for the get_archive_files command
     archive_parser = subparsers.add_parser('get_archive_files', help='Get archive files for a specific ID')
-    archive_parser.add_argument('--id', required=True, type=validate_id, help='The ID to get archive files for')
+    _add_id_or_idlist_arg(archive_parser)
     archive_parser.add_argument('--version', type=validate_version, default="head", 
                               help="Version of the archive files (format: 'v' followed by digits, or 'head'). Default is 'head'")
     archive_parser.add_argument('--filesdir', required=True, help='Directory to save archive files to')
-    archive_parser.set_defaults(func=get_archive_files)
-    
+    archive_parser.set_defaults(func=lambda a: for_each_id(a, get_archive_files))
+
     # Parse arguments and call the appropriate function
     args = parser.parse_args()
+    # If the subparser already wrapped func with for_each_id, just call it.
     args.func(args)
 
 if __name__ == '__main__':
