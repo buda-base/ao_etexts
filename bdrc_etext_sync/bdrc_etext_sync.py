@@ -7,12 +7,14 @@ from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
 from .buda_api import get_buda_AO_info, send_sync_notification
 from .es_utils import sync_id_to_es, convert_tei_root_to_text, remove_previous_etext_es
+from .fs_utils import open_filesystem
 import re
 from pathlib import Path
 from natsort import natsorted
 import os
 from lxml import etree
 import copy
+import fs.path
 
 OCFL_ROOT = os.environ['OCFL_ROOT']
 if not OCFL_ROOT.endswith("/"):
@@ -145,11 +147,21 @@ def sync_files_archive(args):
     logging.info(f"Synced files for {args.id} from directory: {args.filesdir}, ocfl version in archive: {new_version}")
     return new_version
 
-def get_ut_info(xml_file_path):
+def get_ut_info(filesystem, xml_file_path):
+    """
+    Get etext info from XML file.
+    
+    Args:
+        filesystem: PyFilesystem2 filesystem object
+        xml_file_path: Path to XML file within the filesystem
+    
+    Returns:
+        tuple: (nb_pages, nb_characters, src_path)
+    """
     # Parse the XML file
-
     parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
-    tree = etree.parse(xml_file_path, parser)
+    with filesystem.open(xml_file_path, 'rb') as f:
+        tree = etree.parse(f, parser)
     root = tree.getroot()
 
     # Define the TEI namespace
@@ -162,24 +174,40 @@ def get_ut_info(xml_file_path):
     return nb_pages, nb_characters, src_path
 
 def notify_sync(args):
+    """Send sync notification for files in a directory (local or S3)."""
     notification_info = { "ocfl_version": args.version, "volumes": {} }
-    base_path = Path(args.filesdir) / "archive"
+    
+    # Open the filesystem
+    base_fs = open_filesystem(args.filesdir)
+    archive_path = "archive"
+    
+    if not base_fs.exists(archive_path):
+        logging.error(f"Archive directory does not exist at {archive_path}")
+        base_fs.close()
+        return
 
     # Walk through all subdirectories
-    for volume_dir in base_path.iterdir():
-        if volume_dir.is_dir() and volume_dir.name.startswith('VE'):
-            volume_name = volume_dir.name
+    for volume_name in base_fs.listdir(archive_path):
+        vol_path = fs.path.join(archive_path, volume_name)
+        if base_fs.isdir(vol_path) and volume_name.startswith('VE'):
             notification_info["volumes"][volume_name] = {}
 
             # Process XML files in this volume directory
-            xml_files = volume_dir.glob('*.xml')
-            for xml_file in xml_files:
-                ut_name = xml_file.stem  # filename without extension
-                etext_num = int(ut_name[-4:])
-                xml_path = str(xml_file)
-                nb_pages, nb_characters, src_path = get_ut_info(xml_path)
-                # Get the etext info for this XML file
-                notification_info["volumes"][volume_name][ut_name] = { "etext_num": etext_num, "nb_pages": nb_pages, "nb_characters": nb_characters, "src_path": src_path }
+            for filename in base_fs.listdir(vol_path):
+                if filename.endswith('.xml'):
+                    xml_file_path = fs.path.join(vol_path, filename)
+                    ut_name = filename[:-4]  # filename without extension
+                    etext_num = int(ut_name[-4:])
+                    nb_pages, nb_characters, src_path = get_ut_info(base_fs, xml_file_path)
+                    # Get the etext info for this XML file
+                    notification_info["volumes"][volume_name][ut_name] = { 
+                        "etext_num": etext_num, 
+                        "nb_pages": nb_pages, 
+                        "nb_characters": nb_characters, 
+                        "src_path": src_path 
+                    }
+    
+    base_fs.close()
     send_sync_notification(args.id, notification_info)
 
 def sync_files_s3(args):
