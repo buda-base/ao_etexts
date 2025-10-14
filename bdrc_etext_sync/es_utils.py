@@ -109,7 +109,7 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         
         logging.info(f"Processing volume: {vol_name}")
         
-        # Get all XML files in the current subdirectory
+        # Get all XML files in the volume subdirectory
         xml_files = []
         for filename in base_fs.listdir(vol_path):
             if filename.endswith('.xml'):
@@ -117,10 +117,14 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         
         # Sort the XML files alphabetically
         xml_files.sort()
+
+        # character positions are additive
+        last_cnum = 0
+        last_pnum = 0 
         
         # Process each XML file
         for doc_num, xml_file_path in enumerate(xml_files):
-            logging.info(f"get doc for {xml_file_path}")
+            logging.error(f"get doc for {xml_file_path}")
             # Extract just the filename without the path
             doc_name = fs.path.basename(xml_file_path)[:-4]
             mw_lname = mw_root_lname
@@ -130,10 +134,15 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
                     mw_lname = potential_mw
             # Call the get_docs function - read XML content from filesystem
             with base_fs.open(xml_file_path, 'rb') as xml_file:
-                doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname)
+                # we add a page break at the end of the base string if not the last doc
+                add_pb = doc_num < len(xml_files) -1
+                len_basestring, doc_last_pnum, doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname, last_cnum, add_pb)
             if not doc:
                 logging.error(f"could not convert {doc_name}")
                 continue
+            last_cnum += len_basestring
+            if doc_last_pnum > 0:
+                last_pnum = doc_last_pnum
             if vol_name not in docs_by_volume:
                 docs_by_volume[vol_name] = []
             docs_by_volume[vol_name].append(doc)
@@ -153,15 +162,20 @@ def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, i
     base_string, annotations, source_path = convert_tei_to_text(xml_file_path)
     return _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname)
 
-def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, start_at_p=1, add_pb=False):
     """Get doc from file content (file-like object)."""
     parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
     tree = etree.parse(xml_file_content, parser)
     root = tree.getroot()
     base_string, annotations, source_path = convert_tei_root_to_text(root)
-    return _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname)
+    last_pnum = -1
+    if "pages" in annotations and annotations["pages"]:
+        last_pnum = annotations["pages"][-1]["pnum"]
+    if add_pb:
+        base_string += "\n\n"
+    return len(base_string), last_pnum, _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, start_at_p)
 
-def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname):
+def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, start_at_p=1):
     """Build the etext document structure."""
     etext_doc = {}
     etext_doc["_id"] = doc_name
@@ -178,6 +192,10 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
     etext_doc["volumeNumber"] = vol_num
     etext_doc["ocfl_version"] = ocfl_version
     etext_doc["source_path"] = source_path
+    etext_doc["cstart"] = start_at_c
+    etext_doc["cend"] = start_at_c+len(base_string)
+    _shift_all_annotations(annotations, start_at_c)
+    _shift_pages(annotations, start_at_p-1)
     if "pages" in annotations:
         etext_doc["etext_pages"] = annotations["pages"]
     if "hi" in annotations:
@@ -189,12 +207,31 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
         if "chunks" not in etext_doc:
             etext_doc["chunks"] = []
         etext_doc["chunks"].append({
-            "cstart": chunk_indexes[i],
-            "cend": chunk_indexes[i + 1],
+            "cstart": chunk_indexes[i] + start_at_c,
+            "cend": chunk_indexes[i + 1] + start_at_c,
             "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
         })
     return etext_doc
 
+def _shift_all_annotations(annotations, start_at_c):
+    """
+    We have a list of annotations and we shift all character coordinates by start_at_c in place
+    """
+    if not start_at_c:
+        return annotations
+    for _, anno_list in annotations.items():
+        for anno in anno_list:
+            anno['cstart'] += start_at_c
+            anno['cend'] += start_at_c
+
+def _shift_pages(annotations, p_shift):
+    """
+    We have a list of annotations and we shift all character coordinates by start_at_c in place
+    """
+    if not p_shift or "pages" not in annotations:
+        return annotations
+    for anno in annotations["pages"]:
+        anno['pnum'] += p_shift
 
 def add_position_diff(positions, diffs, position, cumulative_diff):
     if not positions or position > positions[-1]:
