@@ -289,10 +289,10 @@ class OutlineEtextLookup:
             else:
                 etextnum_end = etextnum_start
             self.cls.append({"mw": mw_lname, "vnum_start": volnum_start, "vnum_end": volnum_end, "etextnum_start": etextnum_start, "etextnum_end": etextnum_end})
-        print(self.cls)
         
     def get_cls_for(self, vnum, etextnum):
         res = []
+        # add all possible cls
         for cl in self.cls:
             if vnum == cl["vnum_end"] and vnum != cl["vnum_start"] and (not cl["etextnum_end"] or cl["etextnum_end"] >= etextnum):
                 res.append(cl)
@@ -309,10 +309,25 @@ class OutlineEtextLookup:
         TODO: this should be redone, it currently only works for very simple cases
         """
         cl_list = self.get_cls_for(vnum, etextnum)
-        print(cl_list)
         if not cl_list:
             return None
-        return cl_list[0]["mw"]
+        if len(cl_list) == 1:
+            return cl_list[0]["mw"]
+        # take the tightest around the etextnum
+        # TODO: this works only with no crossover between volumes
+        tightest = 1000 # 999 is for None:None, 998 is for None:something or something:None
+        tightest_idx = -1
+        for i, cl in enumerate(cl_list):
+            if not cl["etextnum_start"] and not cl["etextnum_end"]:
+                tightness = 999
+            elif not cl["etextnum_start"] or not cl["etextnum_end"]:
+                tightness = 998
+            else:
+                tightness = cl["etextnum_end"] - cl["etextnum_start"]
+            if tightness < tightest:
+                tightest = tightness
+                tightest_idx = i
+        return cl_list[tightest_idx]["mw"]
 
 class OutlinePageLookup:
     """
