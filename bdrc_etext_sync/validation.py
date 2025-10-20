@@ -23,7 +23,7 @@ def get_volumes(ie_lname):
         Exception: If HTTP response is not 200 or if RDF parsing fails
     """
     # Construct the URL for the resource
-    url = f"https://ldspdi-dev.bdrc.io/resource/{ie_lname}.ttl"
+    url = f"https://ldspdi.bdrc.io/resource/{ie_lname}.ttl"
     
     # Fetch the data
     response = requests.get(url)
@@ -202,8 +202,9 @@ def validate_files(eid, filesdir):
                         xml_doc = etree.parse(filepath)
                         
                         # Find SRC_PATH elements
-                        src_paths = xml_doc.xpath("//tei:idno[@type='src_path']/text()", namespaces=ns)
-                        for src_path in src_paths:
+                        src_elems = xml_doc.xpath("//tei:idno[@type='src_path']", namespaces=ns)
+                        for src_elem in src_elems:
+                            src_path = src_elem.text.strip()
                             full_src_path = os.path.join(sources_dir, src_path)
                             
                             # Check if source file exists
@@ -212,8 +213,8 @@ def validate_files(eid, filesdir):
                                 continue
                             
                             # Get sha256 elements that are siblings to SRC_PATH
-                            xpath = f"//tei:idno[@type='src_path'][text()='{src_path}']/following-sibling::tei:idno[@type='src_sha256']/text()"
-                            sha256_values = xml_doc.xpath(xpath, namespaces=ns)
+                            xpath = f"//tei:idno[@type='src_path'][text()=$val]/following-sibling::tei:idno[@type='src_sha256']/text()"
+                            sha256_values = xml_doc.xpath(xpath, namespaces=ns, val=src_path)
                             
                             if not sha256_values:
                                 warns.append(f"No sha256 checksum found for source {src_path} in {filename}")
