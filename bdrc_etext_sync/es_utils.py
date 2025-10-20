@@ -26,7 +26,8 @@ def get_os_client():
             hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
             http_compress = True, # enables gzip compression for request bodies
             http_auth = (os.getenv("OPENSEARCH_USER"), os.getenv("OPENSEARCH_PASS")),
-            use_ssl = True
+            use_ssl = True,
+            timeout=120
         )
     return CLIENT
 
@@ -58,7 +59,7 @@ def send_docs_to_es(docs_by_volume, ie):
                 print(json.dumps(volume_docs, indent=2, ensure_ascii=False))
             for doc in volume_docs:
                 logging.info("send %s" % doc["_id"])
-            response = helpers.bulk(get_os_client(), volume_docs, max_retries=3, request_timeout=60)
+            response = helpers.bulk(get_os_client(), volume_docs, max_retries=2, request_timeout=120)
     except:
         logging.exception("The request to ES had an exception for " + ie)
 
@@ -136,7 +137,7 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
             with base_fs.open(xml_file_path, 'rb') as xml_file:
                 # we add a page break at the end of the base string if not the last doc
                 add_pb = doc_num < len(xml_files) -1
-                len_basestring, doc_last_pnum, doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname, last_cnum, add_pb)
+                len_basestring, doc_last_pnum, doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname, last_cnum, last_pnum, add_pb)
             if not doc:
                 logging.error(f"could not convert {doc_name}")
                 continue
@@ -162,20 +163,20 @@ def get_doc(xml_file_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, i
     base_string, annotations, source_path = convert_tei_to_text(xml_file_path)
     return _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname)
 
-def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, start_at_p=1, add_pb=False):
+def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=0, add_pb=False):
     """Get doc from file content (file-like object)."""
     parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
     tree = etree.parse(xml_file_content, parser)
     root = tree.getroot()
     base_string, annotations, source_path = convert_tei_root_to_text(root)
-    last_pnum = -1
+    new_last_pnum = last_pnum
     if "pages" in annotations and annotations["pages"]:
-        last_pnum = annotations["pages"][-1]["pnum"]
+        new_last_pnum += annotations["pages"][-1]["pnum"]
     if add_pb:
         base_string += "\n\n"
-    return len(base_string), last_pnum, _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, start_at_p)
+    return len(base_string), new_last_pnum, _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, last_pnum)
 
-def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, start_at_p=1):
+def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=1):
     """Build the etext document structure."""
     etext_doc = {}
     etext_doc["_id"] = doc_name
@@ -195,7 +196,7 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
     etext_doc["cstart"] = start_at_c
     etext_doc["cend"] = start_at_c+len(base_string)
     _shift_all_annotations(annotations, start_at_c)
-    _shift_pages(annotations, start_at_p-1)
+    _shift_pages(annotations, last_pnum)
     if "pages" in annotations:
         etext_doc["etext_pages"] = annotations["pages"]
     if "hi" in annotations:
