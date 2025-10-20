@@ -5,6 +5,16 @@ from fs.osfs import OSFS
 from fs_s3fs import S3FS
 import fs.opener
 
+def _id_subdir_path(base_dir, id_s, use_fs=False):
+    """
+    Resolve the directory that actually contains the files for the given id,
+    assuming files live in a subdirectory named exactly like the id.
+    If use_fs is True, join using fs.path (for PyFilesystem paths like s3://...).
+    """
+    sub = to_dirname(id_s)
+    if use_fs:
+        return fs.path.join(base_dir, sub)
+    return os.path.join(base_dir, sub)
 
 def open_filesystem(path_or_url, create=False, writeable=True):
     """

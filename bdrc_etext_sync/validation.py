@@ -8,6 +8,7 @@ from rdflib import Graph, URIRef
 from urllib.parse import urlparse
 import logging
 from importlib import resources
+from .fs_utils import _id_subdir_path
 
 def get_volumes(ie_lname):
     """
@@ -64,7 +65,7 @@ def get_volumes(ie_lname):
 
 def validate_files_and_log(args):
     logging.info(f"Validating files for ID: {args.id} in directory: {args.filesdir}")
-    passed, warns, errors = validate_files(args.id, args.filesdir)
+    passed, warns, errors = validate_files(args.id, _id_subdir_path(args.filesdir, args.id))
     logging.info("Validation %s with %d warning(s) and %d error(s)", "passed" if passed else "failed", len(warns), len(errors))
     if warns:
         logging.warn("Validation warnings:")

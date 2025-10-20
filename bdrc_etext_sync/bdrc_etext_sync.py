@@ -7,7 +7,7 @@ from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
 from .buda_api import get_buda_AO_info, send_sync_notification
 from .es_utils import sync_id_to_es, convert_tei_root_to_text, remove_previous_etext_es
-from .fs_utils import open_filesystem
+from .fs_utils import open_filesystem, _id_subdir_path
 import re
 from pathlib import Path
 from natsort import natsorted
@@ -97,7 +97,7 @@ def sync_files_archive(args):
     Returns the head version of the ocfl object in the archive after the operation.
     """
     ensure_ocfl_init()
-    srcdir = args.filesdir
+    srcdir = _id_subdir_path(args.filesdir, args.id)
     if not os.path.isdir(srcdir):
         raise Exception("not a directory: "+srcdir)
     store = ocfl.StorageRoot(root=OCFL_ROOT)
@@ -178,7 +178,8 @@ def notify_sync(args):
     notification_info = { "ocfl_version": args.version, "volumes": {} }
     
     # Open the filesystem
-    base_fs = open_filesystem(args.filesdir)
+    id_dir = _id_subdir_path(args.filesdir, args.id, use_fs=True)
+    base_fs = open_filesystem(id_dir)
     archive_path = "archive"
     
     if not base_fs.exists(archive_path):
@@ -212,7 +213,7 @@ def notify_sync(args):
 
 def sync_files_s3(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
-    return sync_id_to_s3(args.id, args.filesdir)
+    return sync_id_to_s3(args.id, _id_subdir_path(args.filesdir, args.id))
 
 def sync_to_es(args):
     # hardcode configuration (not ideal) so the command can be run without access to the archive
@@ -220,82 +221,18 @@ def sync_to_es(args):
     if not ie_info:
         logging.error(f"could not find {args.id} in the database")
         return
-    return sync_id_to_es(ie_info["mw_root_lname"], args.id, args.filesdir, args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"])
+    return sync_id_to_es(ie_info["mw_root_lname"], args.id, _id_subdir_path(args.filesdir, args.id), args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"])
 
 def delete_es(args):
     """Remove previous eText index in ElasticSearch for this/these id(s)."""
     logging.info(f"Deleting previous eText index for {args.id}")
     return remove_previous_etext_es(args.id)
 
-def get_batch_info(batch_dir, requires_version=False):
-    # Ensure batch_dir exists and is a directory
-    if not os.path.isdir(batch_dir):
-        raise ValueError(f"'{batch_dir}' is not a valid directory")
-
-    # Get all entries in the batch directory
-    all_entries = os.listdir(batch_dir)
-    all_entries.sort()
-
-    res = []
-    for entry in all_entries:
-        if not os.path.isdir(os.path.join(batch_dir, entry)):
-            logging.warning(f"ignore file {entry}")
-            continue
-        if not entry.startswith("IE"):
-            logging.warning(f"ignore directory {entry}")
-            continue
-        match = re.match(r'^(.+?)[-_]v(\d+)$', entry)
-        if match:
-            eid = match.group(1)
-            version = match.group(2)
-        else:
-            eid = entry
-            version = None
-            if requires_version:
-                logging.warning(f"ignore directory {entry} (lacks OCFL version indication)")
-                continue
-        res.append({
-            "path": os.path.join(batch_dir, entry),
-            "eid": eid,
-            "version": version
-            })
-    return res
-
-
-    # Process each directory
-    for subdir_basename in ie_dirs:
-        subdir_path = os.path.join(batch_dir, subdir_basename)
-
-        # Call the validate function (assuming it's defined elsewhere)
-        validate(subdir_basename, subdir_path)
-
-    return len(ie_dirs)  # Return number of processed directories
-
-def validate_files_batch(args):
-    batch_infos = get_batch_info(args.batch_dir, requires_version=False)
-    nb_total = len(batch_infos)
-    logging.info(f"validate {nb_total} directories")
-    nb_passed = 0
-    for bi in batch_infos:
-        passed, warnings, errors = validate_files(bi["eid"], bi["path"])
-        bi["passed"] = passed
-        if passed:
-            nb_passed += 1
-        bi["warnings"] = warnings
-        bi["errors"] = errors
-        if errors:
-            for e in errors:
-                logging.error(e)
-    if nb_passed == nb_total:
-        logging.info(f"all {nb_passed} directories passed")
-    else:
-        logging.error(f"{nb_passed} / {nb_total} passed")
-
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
     ensure_ocfl_init()
-    dstdir = args.filesdir
-    if os.path.isdir(dstdir):
+    dstdir = os.path.join(args.filesdir, to_ocfl_id(args.id))
+    if os.path.exists(dstdir):
         raise Exception("directory already exists: "+dstdir)
     store = ocfl.StorageRoot(root=OCFL_ROOT)
     ocfl_id = to_ocfl_id(args.id)
@@ -336,11 +273,6 @@ def main():
     _add_id_or_idlist_arg(validate_parser)
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
     validate_parser.set_defaults(func=lambda a: for_each_id(a, validate_files_and_log))
-
-    # Parser for the validate_files_batch command
-    validate_batch_parser = subparsers.add_parser('validate_files_batch', help='Validate files for all folders in a directory')
-    validate_batch_parser.add_argument('--batch_dir', required=True, help='The folder containing the IDs to validate')
-    validate_batch_parser.set_defaults(func=validate_files_batch)
 
     # Parser for the sync_archive command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
