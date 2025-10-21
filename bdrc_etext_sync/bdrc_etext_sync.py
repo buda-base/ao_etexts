@@ -15,10 +15,14 @@ import os
 from lxml import etree
 import copy
 import fs.path
+import argcomplete
+from argcomplete.completers import DirectoriesCompleter, FilesCompleter, ChoicesCompleter
 
-OCFL_ROOT = os.environ['OCFL_ROOT']
-if not OCFL_ROOT.endswith("/"):
-    OCFL_ROOT += "/"
+OCFL_ROOT = None
+if 'OCFL_ROOT' in os.environ:
+    OCFL_ROOT = os.environ['OCFL_ROOT']
+    if not OCFL_ROOT.endswith("/"):
+        OCFL_ROOT += "/"
 OCFL_VERSION = "1.1"
 OCFL_DIGEST = "sha256"
 OCFL_PATH_NORM = "uri"
@@ -33,6 +37,8 @@ def ensure_ocfl_init():
     from ocfl.layout_registry import register_layout
     from .ocfl_layout_bdrc_etexts import Layout_BDRC_etexts
     register_layout("bdrc_etexts", Layout_BDRC_etexts)
+    if OCFL_ROOT is None:
+        raise Exception("environment variable OCFL_ROOT not set, aborting")
     OCFL_INIT = True
 
 def validate_version(version):
@@ -262,6 +268,23 @@ def _add_id_or_idlist_arg(p):
     g.add_argument('--idlistpath', help='Path to a file with one ID per line (blank lines ignored)')
     return p
 
+class VersionCompleter:
+    """Suggest 'head' and some common 'vN' patterns.
+    This is a heuristic; actual valid versions depend on the object in archive.
+    """
+    def __call__(self, **kwargs):
+        # Suggest 'head' and v1..v50 by default
+        base = ["head"]
+        base.extend([f"v{i}" for i in range(1, 51)])
+        return base
+
+def _set_completer(parser, option_flag, completer):
+    """Attach an argcomplete completer to the option if present."""
+    for action in getattr(parser, "_actions", []):
+        if option_flag in getattr(action, "option_strings", []):
+            action.completer = completer
+            break
+
 def main():
     # Create the top-level parser
     parser = argparse.ArgumentParser(prog='bdrc_etext_sync', description='BDRC eText management tool')
@@ -311,6 +334,30 @@ def main():
                               help="Version of the archive files (format: 'v' followed by digits, or 'head'). Default is 'head'")
     archive_parser.add_argument('--filesdir', required=True, help='Directory to save archive files to')
     archive_parser.set_defaults(func=lambda a: for_each_id(a, get_archive_files))
+
+    # Path-like completions
+    _set_completer(validate_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(sync_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(notify_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(sync_s3_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(sync_es_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(archive_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(validate_parser, '--idlistpath', FilesCompleter())
+    _set_completer(sync_parser, '--idlistpath', FilesCompleter())
+    _set_completer(notify_parser, '--idlistpath', FilesCompleter())
+    _set_completer(sync_s3_parser, '--idlistpath', FilesCompleter())
+    _set_completer(sync_es_parser, '--idlistpath', FilesCompleter())
+    _set_completer(delete_es_parser, '--idlistpath', FilesCompleter())
+    _set_completer(archive_parser, '--idlistpath', FilesCompleter())
+    # Version suggestions
+    vc = VersionCompleter()
+    _set_completer(sync_es_parser, '--version', vc)
+    _set_completer(notify_parser, '--version', vc)
+    _set_completer(archive_parser, '--version', vc)
+
+    # Activate argcomplete for this parser
+    # Users should also enable shell integration; see usage notes.
+    argcomplete.autocomplete(parser)
 
     # Parse arguments and call the appropriate function
     args = parser.parse_args()

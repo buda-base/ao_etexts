@@ -2,3 +2,4 @@ git+https://github.com/buda-base/ocfl-py.git
 opensearch-py
 fs
 fs-s3fs
+argcomplete
