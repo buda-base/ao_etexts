@@ -34,9 +34,9 @@ def ensure_ocfl_init():
     global OCFL_INIT
     if OCFL_INIT:
         return
-    from ocfl.layout_registry import register_layout
+    from ocfl.layout_registry import add_layout
     from .ocfl_layout_bdrc_etexts import Layout_BDRC_etexts
-    register_layout("bdrc_etexts", Layout_BDRC_etexts)
+    add_layout("bdrc_etexts", Layout_BDRC_etexts)
     if OCFL_ROOT is None:
         raise Exception("environment variable OCFL_ROOT not set, aborting")
     OCFL_INIT = True

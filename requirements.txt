@@ -1,4 +1,4 @@
-git+https://github.com/buda-base/ocfl-py.git
+git+https://github.com/zimeon/ocfl-py.git
 opensearch-py
 fs
 fs-s3fs
