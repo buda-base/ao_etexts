@@ -54,7 +54,7 @@ def validate_version(version):
 def validate_id(id_s):
     """Validates the version format. Must be 'head' or 'v' followed by digits."""
     if not re.match(r'^IE\d[A-Z0-9_]+$', id_s):
-        raise argparse.ArgumentTypeError("id must be in the form IE then a digit, then upper case letters and digits")
+        raise argparse.ArgumentTypeError(f"invalid id {id_s}, must be in the form 'IE' then a digit, then upper case letters and digits")
 
     return id_s
 
