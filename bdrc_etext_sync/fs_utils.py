@@ -4,13 +4,14 @@ from fs.base import FS
 from fs.osfs import OSFS
 from fs_s3fs import S3FS
 import fs.opener
+import os
 
 def to_dirname(id_s):
-    if id_s.startswith("IE"):
-        return "http://purl.bdrc.io/resource/"+id_s
+    if id_s.startswith("http://purl.bdrc.io/resource/IE"):
+        return id_s[29:]
     elif id_s.startswith("bdr:IE"):
-        return "http://purl.bdrc.io/resource/"+id_s[4:]
-    elif id_s.startswith("http://purl.bdrc.io/resource/IE"):
+        return id_s[4:]
+    elif id_s.startswith("IE"):
         return id_s
     raise Exception("unable to parse id "+id_s)
 
