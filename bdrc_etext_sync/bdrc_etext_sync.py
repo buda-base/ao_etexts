@@ -47,13 +47,12 @@ def validate_version(version):
         return version
 
     if not re.match(r'^v\d+$', version):
-        raise argparse.ArgumentTypeError("Version must be 'head' or 'v' followed by digits (e.g., v1, v2, v10)")
+        raise argparse.ArgumentTypeError(f"Invalid version {version}, must be 'head' or 'v' followed by digits (e.g., v1, v2, v10)")
 
     return version
 
 def validate_id(id_s):
-    """Validates the version format. Must be 'head' or 'v' followed by digits."""
-    if not re.match(r'^IE\d[A-Z0-9_]+$', id_s):
+    if not re.match(r'^IE\d[A-Z0-9_\-]+$', id_s):
         raise argparse.ArgumentTypeError(f"invalid id {id_s}, must be in the form 'IE' then a digit, then upper case letters and digits")
 
     return id_s
