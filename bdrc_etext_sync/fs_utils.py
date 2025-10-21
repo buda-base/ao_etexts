@@ -5,6 +5,15 @@ from fs.osfs import OSFS
 from fs_s3fs import S3FS
 import fs.opener
 
+def to_dirname(id_s):
+    if id_s.startswith("IE"):
+        return "http://purl.bdrc.io/resource/"+id_s
+    elif id_s.startswith("bdr:IE"):
+        return "http://purl.bdrc.io/resource/"+id_s[4:]
+    elif id_s.startswith("http://purl.bdrc.io/resource/IE"):
+        return id_s
+    raise Exception("unable to parse id "+id_s)
+
 def _id_subdir_path(base_dir, id_s, use_fs=False):
     """
     Resolve the directory that actually contains the files for the given id,
