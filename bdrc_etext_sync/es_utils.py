@@ -12,7 +12,7 @@ import fs.path
 from opensearchpy import OpenSearch, helpers
 
 from .chunkers import TibetanEasyChunker
-from .buda_api import OutlineEtextLookup
+from .buda_api import OutlineEtextLookup, EtextSegment
 from .fs_utils import open_filesystem
 
 INDEX = "bdrc_prod"
@@ -100,235 +100,267 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
     """
     Segment converted etexts based on outline information with milestone boundaries.
     
-    Algorithm:
-    1. Get content locations from outline for this volume
-    2. For each etext, identify which segments belong to which content location based on milestones
-    3. Build documents that may span multiple etexts
-    4. Handle gaps (etexts not covered by outline) by using root MW
+    Algorithm per @eroux:
+    1. Convert all etexts (already done)
+    2. Iterate over each etext segment (space between two milestones)
+    3. Detect document boundaries based on outline
+    4. When outline signals end of text, finish doc and start new one
+    5. Handle overlaps and gaps
+    
+    Character coordinates are continuous per volume.
     """
     docs = []
     content_locations = oel.get_content_locations_for_volume(vol_num)
     
     if not content_locations:
-        # No content locations for this volume, use root MW for all
         logging.warning(f"No content locations found for volume {vol_num}, using root MW")
         return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version)
     
-    # Track which parts of which etexts have been processed
-    processed_segments = set()  # (etext_num, start_pos, end_pos)
+    # Build list of all milestone segments in order
+    all_segments = []
+    volume_char_offset = 0
     
-    doc_counter = 0
-    last_cnum = 0
-    last_pnum = 0
-    
-    # Process each content location
-    for cl in content_locations:
-        mw_lname = cl["mw"]
-        cl_start_etext = cl["etextnum_start"] if cl["etextnum_start"] else 1
-        cl_end_etext = cl["etextnum_end"] if cl["etextnum_end"] else len(converted_etexts)
-        cl_start_id = cl["id_in_etext"]
-        cl_end_id = cl["end_id_in_etext"]
-        
-        # Collect text and annotations from relevant etexts
-        merged_text = ""
-        merged_annotations = {"pages": [], "hi": []}
-        merged_milestones = {}
-        source_paths = []
-        
-        for etext_data in converted_etexts:
-            etext_num = etext_data["etext_num"]
-            
-            # Check if this etext is part of this content location
-            if etext_num < cl_start_etext or etext_num > cl_end_etext:
-                continue
-            
-            text = etext_data["text"]
-            annotations = etext_data["annotations"]
-            milestones = annotations.get("milestones", {})
-            
-            # Determine start and end positions in this etext
-            start_pos = 0
-            end_pos = len(text)
-            
-            # Handle start milestone
-            if etext_num == cl_start_etext and cl_start_id:
-                if cl_start_id in milestones:
-                    start_pos = milestones[cl_start_id]
-                else:
-                    logging.warning(f"Start milestone '{cl_start_id}' not found in etext {etext_num}")
-            
-            # Handle end milestone  
-            if etext_num == cl_end_etext and cl_end_id:
-                if cl_end_id in milestones:
-                    end_pos = milestones[cl_end_id]
-                else:
-                    logging.warning(f"End milestone '{cl_end_id}' not found in etext {etext_num}")
-            
-            # Extract segment
-            segment_text = text[start_pos:end_pos]
-            
-            # Mark as processed
-            processed_segments.add((etext_num, start_pos, end_pos))
-            
-            # Adjust annotations for this segment
-            offset = len(merged_text)
-            segment_annotations = _extract_annotations_for_segment(annotations, start_pos, end_pos, offset)
-            
-            # Merge annotations
-            if "pages" in segment_annotations:
-                merged_annotations["pages"].extend(segment_annotations["pages"])
-            if "hi" in segment_annotations:
-                merged_annotations["hi"].extend(segment_annotations["hi"])
-            if "milestones" in segment_annotations:
-                merged_milestones.update(segment_annotations["milestones"])
-            
-            merged_text += segment_text
-            source_paths.append(etext_data["source_path"])
-        
-        if merged_milestones:
-            merged_annotations["milestones"] = merged_milestones
-        
-        # Create document for this content location
-        if merged_text:
-            doc_counter += 1
-            doc_name = f"{vol_name}_{doc_counter:03d}"
-            
-            # Update page numbers
-            new_last_pnum = last_pnum
-            if merged_annotations.get("pages"):
-                new_last_pnum += merged_annotations["pages"][-1]["pnum"]
-            
-            doc = _build_etext_doc(
-                merged_text, merged_annotations, "; ".join(filter(None, source_paths)),
-                vol_name, vol_num, ocfl_version,
-                doc_name, doc_counter,
-                ie_lname, mw_lname, mw_root_lname,
-                last_cnum, last_pnum
-            )
-            docs.append(doc)
-            
-            last_cnum += len(merged_text)
-            last_pnum = new_last_pnum
-    
-    # Handle gaps: process unprocessed segments with root MW
     for etext_data in converted_etexts:
         etext_num = etext_data["etext_num"]
         text = etext_data["text"]
+        annotations = etext_data["annotations"]
+        milestones = annotations.get("milestones", {})
         
-        # Find unprocessed parts
-        unprocessed_ranges = _find_unprocessed_ranges(etext_num, len(text), processed_segments)
+        if milestones:
+            # Sort milestones by position
+            sorted_milestones = sorted(milestones.items(), key=lambda x: x[1])
+            
+            # Create segments: start -> m1, m1 -> m2, ..., last_m -> end
+            prev_id = None
+            for i, (m_id, m_pos) in enumerate(sorted_milestones):
+                segment = EtextSegment(text, annotations, prev_id, m_id, etext_num)
+                segment.volume_char_offset = volume_char_offset + segment.start_pos
+                all_segments.append(segment)
+                prev_id = m_id
+            
+            # Last segment: from last milestone to end
+            segment = EtextSegment(text, annotations, prev_id, None, etext_num)
+            segment.volume_char_offset = volume_char_offset + segment.start_pos
+            all_segments.append(segment)
+        else:
+            # No milestones: whole etext is one segment
+            segment = EtextSegment(text, annotations, None, None, etext_num)
+            segment.volume_char_offset = volume_char_offset
+            all_segments.append(segment)
         
-        for start_pos, end_pos in unprocessed_ranges:
-            logging.info(f"Gap found in etext {etext_num} [{start_pos}:{end_pos}], using root MW")
+        volume_char_offset += len(text)
+    
+    # Now iterate through segments and build documents
+    doc_counter = 0
+    current_doc_text = ""
+    current_doc_annotations = {"pages": [], "hi": [], "milestones": {}}
+    current_doc_mw = None
+    current_doc_start_offset = 0
+    last_pnum = 0
+    processed_segments = set()
+    
+    for segment in all_segments:
+        # Find matching content location for this segment
+        matching_cl = _find_matching_cl(segment, content_locations)
+        
+        if matching_cl:
+            # Check for overlap: if a new CL starts before current one ends
+            if current_doc_mw and current_doc_mw != matching_cl["mw"]:
+                logging.error(f"Overlap detected: text {matching_cl['mw']} starts before {current_doc_mw} ends at etext {segment.etext_num}")
+                # Finish current doc at the start of the new one
+                if current_doc_text:
+                    doc_counter += 1
+                    doc = _create_document_from_parts(
+                        current_doc_text, current_doc_annotations,
+                        vol_name, vol_num, ocfl_version, doc_counter,
+                        ie_lname, current_doc_mw, mw_root_lname,
+                        current_doc_start_offset, last_pnum
+                    )
+                    docs.append(doc)
+                    last_pnum = _get_last_pnum(current_doc_annotations, last_pnum)
+                
+                # Start new document
+                current_doc_text = ""
+                current_doc_annotations = {"pages": [], "hi": [], "milestones": {}}
+                current_doc_mw = matching_cl["mw"]
+                current_doc_start_offset = segment.volume_char_offset
+            elif not current_doc_mw:
+                # First document
+                current_doc_mw = matching_cl["mw"]
+                current_doc_start_offset = segment.volume_char_offset
             
-            segment_text = text[start_pos:end_pos]
-            segment_annotations = _extract_annotations_for_segment(
-                etext_data["annotations"], start_pos, end_pos, 0
-            )
+            # Add this segment to current document
+            seg_text = segment.get_text()
+            seg_annotations = segment.get_annotations_for_segment(len(current_doc_text))
+            current_doc_text += seg_text
+            _merge_annotations(current_doc_annotations, seg_annotations)
+            processed_segments.add(id(segment))
             
-            doc_counter += 1
-            doc_name = f"{vol_name}_{doc_counter:03d}_gap"
-            
-            # Update page numbers
-            new_last_pnum = last_pnum
-            if segment_annotations.get("pages"):
-                new_last_pnum += segment_annotations["pages"][-1]["pnum"]
-            
-            doc = _build_etext_doc(
-                segment_text, segment_annotations, etext_data["source_path"],
-                vol_name, vol_num, ocfl_version,
-                doc_name, doc_counter,
-                ie_lname, mw_root_lname, mw_root_lname,
-                last_cnum, last_pnum
-            )
-            docs.append(doc)
-            
-            last_cnum += len(segment_text)
-            last_pnum = new_last_pnum
+            # Check if this marks the end of current content location
+            if _is_end_of_content_location(segment, matching_cl):
+                # Finish document
+                if current_doc_text:
+                    doc_counter += 1
+                    doc = _create_document_from_parts(
+                        current_doc_text, current_doc_annotations,
+                        vol_name, vol_num, ocfl_version, doc_counter,
+                        ie_lname, current_doc_mw, mw_root_lname,
+                        current_doc_start_offset, last_pnum
+                    )
+                    docs.append(doc)
+                    last_pnum = _get_last_pnum(current_doc_annotations, last_pnum)
+                
+                # Reset for next document
+                current_doc_text = ""
+                current_doc_annotations = {"pages": [], "hi": [], "milestones": {}}
+                current_doc_mw = None
+        else:
+            # Gap: not covered by any content location
+            if id(segment) not in processed_segments:
+                logging.error(f"Gap: etext {segment.etext_num} segment {segment.start_id}->{segment.end_id} not covered by outline")
+                # Create document with root MW
+                seg_text = segment.get_text()
+                if seg_text.strip():  # Only if there's actual content
+                    seg_annotations = segment.get_annotations_for_segment(0)
+                    doc_counter += 1
+                    doc = _create_document_from_parts(
+                        seg_text, seg_annotations,
+                        vol_name, vol_num, ocfl_version, doc_counter,
+                        ie_lname, mw_root_lname, mw_root_lname,
+                        segment.volume_char_offset, last_pnum
+                    )
+                    docs.append(doc)
+                    last_pnum = _get_last_pnum(seg_annotations, last_pnum)
+                processed_segments.add(id(segment))
+    
+    # Finish any remaining document
+    if current_doc_text:
+        doc_counter += 1
+        doc = _create_document_from_parts(
+            current_doc_text, current_doc_annotations,
+            vol_name, vol_num, ocfl_version, doc_counter,
+            ie_lname, current_doc_mw or mw_root_lname, mw_root_lname,
+            current_doc_start_offset, last_pnum
+        )
+        docs.append(doc)
     
     return docs
 
-def _extract_annotations_for_segment(annotations, start_pos, end_pos, offset):
+def _find_matching_cl(segment, content_locations):
     """
-    Extract and adjust annotations for a specific text segment.
+    Find which content location this segment belongs to.
     
     Args:
-        annotations: Full annotations dict
-        start_pos: Start position in original text
-        end_pos: End position in original text
-        offset: Offset to add to all positions (for merging)
+        segment: EtextSegment instance
+        content_locations: List of content location dicts
     
     Returns:
-        Adjusted annotations dict for the segment
+        Content location dict or None if no match
     """
-    segment_annotations = {}
+    etext_num = segment.etext_num
+    start_id = segment.start_id
+    end_id = segment.end_id
     
-    # Handle pages
-    if "pages" in annotations:
-        segment_annotations["pages"] = []
-        for page in annotations["pages"]:
-            if page["cstart"] >= start_pos and page["cstart"] < end_pos:
-                new_page = page.copy()
-                new_page["cstart"] = page["cstart"] - start_pos + offset
-                new_page["cend"] = min(page["cend"], end_pos) - start_pos + offset
-                segment_annotations["pages"].append(new_page)
+    for cl in content_locations:
+        cl_start_etext = cl["etextnum_start"] or 1
+        cl_end_etext = cl["etextnum_end"] or etext_num
+        cl_start_id = cl["id_in_etext"]
+        cl_end_id = cl["end_id_in_etext"]
+        
+        # Check if etext is in range
+        if etext_num < cl_start_etext or etext_num > cl_end_etext:
+            continue
+        
+        # If at start etext, check milestone
+        if etext_num == cl_start_etext and cl_start_id:
+            # This segment should start at or after the cl_start_id
+            if cl_start_id in segment.milestones:
+                # Check if segment starts before the CL start
+                if start_id and segment.milestones.get(start_id, 0) < segment.milestones[cl_start_id]:
+                    continue
+            else:
+                continue  # Start milestone not found
+        
+        # If at end etext, check milestone
+        if etext_num == cl_end_etext and cl_end_id:
+            # This segment should end at or before cl_end_id
+            if cl_end_id in segment.milestones:
+                # Check if segment ends after the CL end
+                if end_id and segment.milestones.get(end_id, float('inf')) > segment.milestones[cl_end_id]:
+                    continue
+            else:
+                continue  # End milestone not found
+        
+        return cl
     
-    # Handle hi (highlights)
-    if "hi" in annotations:
-        segment_annotations["hi"] = []
-        for hi in annotations["hi"]:
-            if hi["cstart"] >= start_pos and hi["cstart"] < end_pos:
-                new_hi = hi.copy()
-                new_hi["cstart"] = hi["cstart"] - start_pos + offset
-                new_hi["cend"] = min(hi["cend"], end_pos) - start_pos + offset
-                segment_annotations["hi"].append(new_hi)
-    
-    # Handle milestones
-    if "milestones" in annotations:
-        segment_annotations["milestones"] = {}
-        for milestone_id, pos in annotations["milestones"].items():
-            if pos >= start_pos and pos < end_pos:
-                segment_annotations["milestones"][milestone_id] = pos - start_pos + offset
-    
-    return segment_annotations
+    return None
 
-def _find_unprocessed_ranges(etext_num, text_length, processed_segments):
+def _is_end_of_content_location(segment, cl):
     """
-    Find ranges in an etext that haven't been processed yet.
+    Check if this segment marks the end of a content location.
     
     Args:
-        etext_num: Etext number to check
-        text_length: Total length of the etext text
-        processed_segments: Set of (etext_num, start_pos, end_pos) tuples
+        segment: EtextSegment instance
+        cl: Content location dict
     
     Returns:
-        List of (start_pos, end_pos) tuples for unprocessed ranges
+        bool: True if this is the last segment of the CL
     """
-    # Get all processed ranges for this etext
-    etext_segments = [(start, end) for (num, start, end) in processed_segments if num == etext_num]
+    etext_num = segment.etext_num
+    end_id = segment.end_id
+    cl_end_etext = cl["etextnum_end"] or etext_num
+    cl_end_id = cl["end_id_in_etext"]
     
-    if not etext_segments:
-        # Entire etext is unprocessed
-        return [(0, text_length)]
+    # If we're at the end etext and segment ends at the end milestone
+    if etext_num == cl_end_etext:
+        if cl_end_id:
+            # Check if segment ends at the CL end
+            return end_id == cl_end_id
+        else:
+            # No end milestone specified, check if we're at end of etext
+            return end_id is None
     
-    # Sort by start position
-    etext_segments.sort()
+    return False
+
+def _merge_annotations(target, source):
+    """Merge source annotations into target."""
+    for key in ["pages", "hi", "div_boundaries"]:
+        if key in source:
+            if key not in target:
+                target[key] = []
+            target[key].extend(source[key])
     
-    # Find gaps
-    unprocessed = []
-    current_pos = 0
+    if "milestones" in source:
+        if "milestones" not in target:
+            target["milestones"] = {}
+        target["milestones"].update(source["milestones"])
+
+def _get_last_pnum(annotations, current_last):
+    """Get the last page number from annotations."""
+    if "pages" in annotations and annotations["pages"]:
+        return annotations["pages"][-1]["pnum"]
+    return current_last
+
+def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_version,
+                                doc_num, ie_lname, mw_lname, mw_root_lname,
+                                start_at_c, last_pnum):
+    """Create a document from accumulated text and annotations."""
+    doc_name = f"{vol_name}_{doc_num:03d}"
     
-    for start, end in etext_segments:
-        if start > current_pos:
-            # Gap before this segment
-            unprocessed.append((current_pos, start))
-        current_pos = max(current_pos, end)
+    # Shift page numbers
+    _shift_pages(annotations, last_pnum)
     
-    # Check for gap at the end
-    if current_pos < text_length:
-        unprocessed.append((current_pos, text_length))
+    # Build document
+    doc = _build_etext_doc(
+        text, annotations, None,  # source_path
+        vol_name, vol_num, ocfl_version,
+        doc_name, doc_num,
+        ie_lname, mw_lname, mw_root_lname,
+        start_at_c, last_pnum
+    )
     
-    return unprocessed
+    return doc
+
 
 def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
     """
