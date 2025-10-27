@@ -63,9 +63,282 @@ def send_docs_to_es(docs_by_volume, ie):
     except:
         logging.exception("The request to ES had an exception for " + ie)
 
+def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version):
+    """
+    Create documents from converted etexts without using outline information.
+    Each etext becomes a separate document using the root MW.
+    """
+    docs = []
+    last_cnum = 0
+    last_pnum = 0
+    
+    for etext_data in converted_etexts:
+        text = etext_data["text"]
+        annotations = etext_data["annotations"]
+        
+        # Update page numbers
+        new_last_pnum = last_pnum
+        if "pages" in annotations and annotations["pages"]:
+            new_last_pnum += annotations["pages"][-1]["pnum"]
+        
+        # Create document
+        doc = _build_etext_doc(
+            text, annotations, etext_data["source_path"],
+            vol_name, vol_num, ocfl_version,
+            etext_data["doc_name"], etext_data["etext_num"],
+            ie_lname, mw_root_lname, mw_root_lname,
+            last_cnum, last_pnum
+        )
+        docs.append(doc)
+        
+        last_cnum += len(text)
+        last_pnum = new_last_pnum
+    
+    return docs
+
+def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version):
+    """
+    Segment converted etexts based on outline information with milestone boundaries.
+    
+    Algorithm:
+    1. Get content locations from outline for this volume
+    2. For each etext, identify which segments belong to which content location based on milestones
+    3. Build documents that may span multiple etexts
+    4. Handle gaps (etexts not covered by outline) by using root MW
+    """
+    docs = []
+    content_locations = oel.get_content_locations_for_volume(vol_num)
+    
+    if not content_locations:
+        # No content locations for this volume, use root MW for all
+        logging.warning(f"No content locations found for volume {vol_num}, using root MW")
+        return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version)
+    
+    # Track which parts of which etexts have been processed
+    processed_segments = set()  # (etext_num, start_pos, end_pos)
+    
+    doc_counter = 0
+    last_cnum = 0
+    last_pnum = 0
+    
+    # Process each content location
+    for cl in content_locations:
+        mw_lname = cl["mw"]
+        cl_start_etext = cl["etextnum_start"] if cl["etextnum_start"] else 1
+        cl_end_etext = cl["etextnum_end"] if cl["etextnum_end"] else len(converted_etexts)
+        cl_start_id = cl["id_in_etext"]
+        cl_end_id = cl["end_id_in_etext"]
+        
+        # Collect text and annotations from relevant etexts
+        merged_text = ""
+        merged_annotations = {"pages": [], "hi": []}
+        merged_milestones = {}
+        source_paths = []
+        
+        for etext_data in converted_etexts:
+            etext_num = etext_data["etext_num"]
+            
+            # Check if this etext is part of this content location
+            if etext_num < cl_start_etext or etext_num > cl_end_etext:
+                continue
+            
+            text = etext_data["text"]
+            annotations = etext_data["annotations"]
+            milestones = annotations.get("milestones", {})
+            
+            # Determine start and end positions in this etext
+            start_pos = 0
+            end_pos = len(text)
+            
+            # Handle start milestone
+            if etext_num == cl_start_etext and cl_start_id:
+                if cl_start_id in milestones:
+                    start_pos = milestones[cl_start_id]
+                else:
+                    logging.warning(f"Start milestone '{cl_start_id}' not found in etext {etext_num}")
+            
+            # Handle end milestone  
+            if etext_num == cl_end_etext and cl_end_id:
+                if cl_end_id in milestones:
+                    end_pos = milestones[cl_end_id]
+                else:
+                    logging.warning(f"End milestone '{cl_end_id}' not found in etext {etext_num}")
+            
+            # Extract segment
+            segment_text = text[start_pos:end_pos]
+            
+            # Mark as processed
+            processed_segments.add((etext_num, start_pos, end_pos))
+            
+            # Adjust annotations for this segment
+            offset = len(merged_text)
+            segment_annotations = _extract_annotations_for_segment(annotations, start_pos, end_pos, offset)
+            
+            # Merge annotations
+            if "pages" in segment_annotations:
+                merged_annotations["pages"].extend(segment_annotations["pages"])
+            if "hi" in segment_annotations:
+                merged_annotations["hi"].extend(segment_annotations["hi"])
+            if "milestones" in segment_annotations:
+                merged_milestones.update(segment_annotations["milestones"])
+            
+            merged_text += segment_text
+            source_paths.append(etext_data["source_path"])
+        
+        if merged_milestones:
+            merged_annotations["milestones"] = merged_milestones
+        
+        # Create document for this content location
+        if merged_text:
+            doc_counter += 1
+            doc_name = f"{vol_name}_{doc_counter:03d}"
+            
+            # Update page numbers
+            new_last_pnum = last_pnum
+            if merged_annotations.get("pages"):
+                new_last_pnum += merged_annotations["pages"][-1]["pnum"]
+            
+            doc = _build_etext_doc(
+                merged_text, merged_annotations, "; ".join(filter(None, source_paths)),
+                vol_name, vol_num, ocfl_version,
+                doc_name, doc_counter,
+                ie_lname, mw_lname, mw_root_lname,
+                last_cnum, last_pnum
+            )
+            docs.append(doc)
+            
+            last_cnum += len(merged_text)
+            last_pnum = new_last_pnum
+    
+    # Handle gaps: process unprocessed segments with root MW
+    for etext_data in converted_etexts:
+        etext_num = etext_data["etext_num"]
+        text = etext_data["text"]
+        
+        # Find unprocessed parts
+        unprocessed_ranges = _find_unprocessed_ranges(etext_num, len(text), processed_segments)
+        
+        for start_pos, end_pos in unprocessed_ranges:
+            logging.info(f"Gap found in etext {etext_num} [{start_pos}:{end_pos}], using root MW")
+            
+            segment_text = text[start_pos:end_pos]
+            segment_annotations = _extract_annotations_for_segment(
+                etext_data["annotations"], start_pos, end_pos, 0
+            )
+            
+            doc_counter += 1
+            doc_name = f"{vol_name}_{doc_counter:03d}_gap"
+            
+            # Update page numbers
+            new_last_pnum = last_pnum
+            if segment_annotations.get("pages"):
+                new_last_pnum += segment_annotations["pages"][-1]["pnum"]
+            
+            doc = _build_etext_doc(
+                segment_text, segment_annotations, etext_data["source_path"],
+                vol_name, vol_num, ocfl_version,
+                doc_name, doc_counter,
+                ie_lname, mw_root_lname, mw_root_lname,
+                last_cnum, last_pnum
+            )
+            docs.append(doc)
+            
+            last_cnum += len(segment_text)
+            last_pnum = new_last_pnum
+    
+    return docs
+
+def _extract_annotations_for_segment(annotations, start_pos, end_pos, offset):
+    """
+    Extract and adjust annotations for a specific text segment.
+    
+    Args:
+        annotations: Full annotations dict
+        start_pos: Start position in original text
+        end_pos: End position in original text
+        offset: Offset to add to all positions (for merging)
+    
+    Returns:
+        Adjusted annotations dict for the segment
+    """
+    segment_annotations = {}
+    
+    # Handle pages
+    if "pages" in annotations:
+        segment_annotations["pages"] = []
+        for page in annotations["pages"]:
+            if page["cstart"] >= start_pos and page["cstart"] < end_pos:
+                new_page = page.copy()
+                new_page["cstart"] = page["cstart"] - start_pos + offset
+                new_page["cend"] = min(page["cend"], end_pos) - start_pos + offset
+                segment_annotations["pages"].append(new_page)
+    
+    # Handle hi (highlights)
+    if "hi" in annotations:
+        segment_annotations["hi"] = []
+        for hi in annotations["hi"]:
+            if hi["cstart"] >= start_pos and hi["cstart"] < end_pos:
+                new_hi = hi.copy()
+                new_hi["cstart"] = hi["cstart"] - start_pos + offset
+                new_hi["cend"] = min(hi["cend"], end_pos) - start_pos + offset
+                segment_annotations["hi"].append(new_hi)
+    
+    # Handle milestones
+    if "milestones" in annotations:
+        segment_annotations["milestones"] = {}
+        for milestone_id, pos in annotations["milestones"].items():
+            if pos >= start_pos and pos < end_pos:
+                segment_annotations["milestones"][milestone_id] = pos - start_pos + offset
+    
+    return segment_annotations
+
+def _find_unprocessed_ranges(etext_num, text_length, processed_segments):
+    """
+    Find ranges in an etext that haven't been processed yet.
+    
+    Args:
+        etext_num: Etext number to check
+        text_length: Total length of the etext text
+        processed_segments: Set of (etext_num, start_pos, end_pos) tuples
+    
+    Returns:
+        List of (start_pos, end_pos) tuples for unprocessed ranges
+    """
+    # Get all processed ranges for this etext
+    etext_segments = [(start, end) for (num, start, end) in processed_segments if num == etext_num]
+    
+    if not etext_segments:
+        # Entire etext is unprocessed
+        return [(0, text_length)]
+    
+    # Sort by start position
+    etext_segments.sort()
+    
+    # Find gaps
+    unprocessed = []
+    current_pos = 0
+    
+    for start, end in etext_segments:
+        if start > current_pos:
+            # Gap before this segment
+            unprocessed.append((current_pos, start))
+        current_pos = max(current_pos, end)
+    
+    # Check for gap at the end
+    if current_pos < text_length:
+        unprocessed.append((current_pos, text_length))
+    
+    return unprocessed
+
 def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
     """
-    Get documents from a local or S3 path.
+    Process etexts for all volumes using outline-based segmentation.
+    
+    New algorithm:
+    1. For each volume, convert all etexts to text with annotations (keeping milestones)
+    2. Use outline information to segment the text based on milestone boundaries
+    3. Create documents that may span multiple etexts
+    4. Handle gaps in outline by using root MW
     
     Args:
         mw_root_lname: Master work root local name
@@ -119,34 +392,42 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         # Sort the XML files alphabetically
         xml_files.sort()
 
-        # character positions are additive
-        last_cnum = 0
-        last_pnum = 0 
-        
-        # Process each XML file
+        # STEP 1: Convert all etexts in this volume to text with annotations
+        converted_etexts = []
         for doc_num, xml_file_path in enumerate(xml_files):
-            logging.error(f"get doc for {xml_file_path}")
-            # Extract just the filename without the path
+            logging.info(f"Converting etext {doc_num+1}: {xml_file_path}")
             doc_name = fs.path.basename(xml_file_path)[:-4]
-            mw_lname = mw_root_lname
-            if oel:
-                potential_mw = oel.get_mw_for(vol_num, doc_num+1)
-                if potential_mw:
-                    mw_lname = potential_mw
-            # Call the get_docs function - read XML content from filesystem
+            
             with base_fs.open(xml_file_path, 'rb') as xml_file:
-                # we add a page break at the end of the base string if not the last doc
-                add_pb = doc_num < len(xml_files) -1
-                len_basestring, doc_last_pnum, doc = get_doc_from_content(xml_file, vol_name, vol_num, ocfl_version, doc_name, doc_num+1, ie_lname, mw_lname, mw_root_lname, last_cnum, last_pnum, add_pb)
-            if not doc:
-                logging.error(f"could not convert {doc_name}")
-                continue
-            last_cnum += len_basestring
-            if doc_last_pnum > 0:
-                last_pnum = doc_last_pnum
-            if vol_name not in docs_by_volume:
-                docs_by_volume[vol_name] = []
-            docs_by_volume[vol_name].append(doc)
+                parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+                tree = etree.parse(xml_file, parser)
+                root = tree.getroot()
+                base_string, annotations, source_path = convert_tei_root_to_text(root)
+                
+                converted_etexts.append({
+                    "etext_num": doc_num + 1,
+                    "doc_name": doc_name,
+                    "text": base_string,
+                    "annotations": annotations,
+                    "source_path": source_path
+                })
+        
+        # STEP 2: Use outline to segment the converted etexts
+        if oel:
+            docs = _segment_etexts_by_outline(
+                converted_etexts, oel, vol_name, vol_num, ie_lname, 
+                mw_root_lname, ocfl_version
+            )
+        else:
+            # No outline: treat each etext as a separate document with root MW
+            docs = _create_docs_without_outline(
+                converted_etexts, vol_name, vol_num, ie_lname,
+                mw_root_lname, ocfl_version
+            )
+        
+        if vol_name not in docs_by_volume:
+            docs_by_volume[vol_name] = []
+        docs_by_volume[vol_name].extend(docs)
 
     base_fs.close()
     return docs_by_volume
