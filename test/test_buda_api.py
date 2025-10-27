@@ -372,6 +372,48 @@ class TestComplexScenarios(unittest.TestCase):
         # Outside range should return None
         self.assertIsNone(oel.get_mw_for(1, 4))
         self.assertIsNone(oel.get_mw_for(2, 1))
+    
+    def test_integration_full_flow(self):
+        """Integration test: Full flow from outline to text extraction"""
+        # Create a simple XML document
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text>
+    <body>
+      <p>Introduction text</p>
+      <milestone xml:id="chapter1" unit="section"/>
+      <p>Chapter 1 content goes here</p>
+      <milestone xml:id="chapter2" unit="section"/>
+      <p>Chapter 2 content goes here</p>
+      <milestone xml:id="chapter3" unit="section"/>
+      <p>Chapter 3 content goes here</p>
+    </body>
+  </text>
+</TEI>"""
+        
+        parser = etree.XMLParser(remove_blank_text=True)
+        tree = etree.fromstring(xml_content.encode('utf-8'), parser)
+        
+        # Test extracting different segments
+        # Extract introduction (before chapter1)
+        intro_seg = EtextSegment(tree, None, "chapter1")
+        intro_text = intro_seg.extract_text()
+        self.assertIn("Introduction", intro_text)
+        self.assertNotIn("Chapter 1", intro_text)
+        
+        # Extract chapter 1 (between chapter1 and chapter2)
+        ch1_seg = EtextSegment(tree, "chapter1", "chapter2")
+        ch1_text = ch1_seg.extract_text()
+        self.assertIn("Chapter 1", ch1_text)
+        self.assertNotIn("Introduction", ch1_text)
+        self.assertNotIn("Chapter 2", ch1_text)
+        
+        # Extract from chapter 2 to end
+        ch2_to_end = EtextSegment(tree, "chapter2", None)
+        ch2_text = ch2_to_end.extract_text()
+        self.assertIn("Chapter 2", ch2_text)
+        self.assertIn("Chapter 3", ch2_text)
+        self.assertNotIn("Introduction", ch2_text)
 
 
 if __name__ == '__main__':
