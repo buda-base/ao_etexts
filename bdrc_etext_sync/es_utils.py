@@ -201,29 +201,58 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
         etext_doc["etext_pages"] = annotations["pages"]
     if "hi" in annotations:
         etext_doc["etext_spans"] = annotations["hi"]
-    # TODO: handle non-Tibetan
-    chunker = TibetanEasyChunker(base_string, 1500, 0, len(base_string))
-    chunk_indexes = chunker.get_chunks()
-    for i in range(0, len(chunk_indexes) - 1):
-        if "chunks" not in etext_doc:
-            etext_doc["chunks"] = []
-        etext_doc["chunks"].append({
-            "cstart": chunk_indexes[i] + start_at_c,
-            "cend": chunk_indexes[i + 1] + start_at_c,
-            "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
-        })
+    
+    # Chunk the text - if div_boundaries exist, chunk each div separately
+    if "div_boundaries" in annotations and annotations["div_boundaries"]:
+        for boundary in annotations["div_boundaries"]:
+            div_start = boundary["start"]
+            div_end = boundary["end"]
+            chunker = TibetanEasyChunker(base_string, 1500, div_start, div_end)
+            chunk_indexes = chunker.get_chunks()
+            for i in range(0, len(chunk_indexes) - 1):
+                if "chunks" not in etext_doc:
+                    etext_doc["chunks"] = []
+                etext_doc["chunks"].append({
+                    "cstart": chunk_indexes[i] + start_at_c,
+                    "cend": chunk_indexes[i + 1] + start_at_c,
+                    "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
+                })
+    else:
+        # Old behavior: chunk the entire document
+        chunker = TibetanEasyChunker(base_string, 1500, 0, len(base_string))
+        chunk_indexes = chunker.get_chunks()
+        for i in range(0, len(chunk_indexes) - 1):
+            if "chunks" not in etext_doc:
+                etext_doc["chunks"] = []
+            etext_doc["chunks"].append({
+                "cstart": chunk_indexes[i] + start_at_c,
+                "cend": chunk_indexes[i + 1] + start_at_c,
+                "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
+            })
     return etext_doc
 
 def _shift_all_annotations(annotations, start_at_c):
     """
-    We have a list of annotations and we shift all character coordinates by start_at_c in place
+    Shift all character coordinates by start_at_c in place.
+    Handles both list-based annotations, milestone dict, and div_boundaries.
     """
     if not start_at_c:
         return annotations
-    for _, anno_list in annotations.items():
-        for anno in anno_list:
-            anno['cstart'] += start_at_c
-            anno['cend'] += start_at_c
+    for key, anno_list in annotations.items():
+        if key == "milestones":
+            # Milestones is a dict of id -> coordinate
+            for milestone_id in anno_list:
+                anno_list[milestone_id] += start_at_c
+        elif key == "div_boundaries":
+            # Div boundaries are a list of dicts with start/end
+            for boundary in anno_list:
+                boundary['start'] += start_at_c
+                boundary['end'] += start_at_c
+        else:
+            # Regular annotations are lists of dicts
+            for anno in anno_list:
+                anno['cstart'] += start_at_c
+                anno['cend'] += start_at_c
 
 def _shift_pages(annotations, p_shift):
     """
@@ -249,7 +278,11 @@ def correct_position(current_position, positions, diffs):
     return current_position + diffs[previous_position_i-1]
 
 def apply_position_diffs(positions, diffs, annotations):
+    """Apply position diffs to annotations, skipping special keys."""
     for type, ann_list in annotations.items():
+        if type in ("milestones", "div_boundaries"):
+            # These have special structure, skip them
+            continue
         for ann in ann_list:
             ann["cstart"] = correct_position(ann["cstart"], positions, diffs)
             ann["cend"] = correct_position(ann["cend"], positions, diffs) 
@@ -350,6 +383,49 @@ def convert_pages(text, annotations):
             p_ann["cend"] = len(output)
     annotations["pages"] = page_annotations
     return output
+
+def convert_milestones(text, annotations):
+    """
+    Replaces <milestone_marker>{id}</milestone_marker> with empty string
+    and tracks the milestone coordinates in annotations
+    """
+    milestone_coords = {}
+    def repl_milestone_marker(m, cstart):
+        milestone_id = m.group("id")
+        milestone_coords[milestone_id] = cstart
+        return ""
+    pat_str = r'[\r\n\s]*<milestone_marker>(?P<id>.*?)</milestone_marker>[\r\n\s]*'
+    output = get_string(text, pat_str, repl_milestone_marker, annotations)
+    if milestone_coords:
+        annotations["milestones"] = milestone_coords
+    return output
+
+def convert_div_boundaries(text, annotations):
+    """
+    Replaces <div_start_marker/> and <div_end_marker/> with empty strings
+    and tracks div boundaries for chunking
+    """
+    div_boundaries = []
+    def repl_div_start_marker(m, cstart):
+        div_boundaries.append({"start": cstart})
+        return ""
+    def repl_div_end_marker(m, cstart):
+        if div_boundaries:
+            div_boundaries[-1]["end"] = cstart
+        return ""
+    
+    # Remove start markers
+    pat_str = r'<div_start_marker\s*/>'
+    output = get_string(text, pat_str, repl_div_start_marker, annotations)
+    # Remove end markers
+    pat_str = r'<div_end_marker\s*/>'
+    output = get_string(output, pat_str, repl_div_end_marker, annotations)
+    
+    if div_boundaries:
+        annotations["div_boundaries"] = div_boundaries
+    return output
+
+
 
 def convert_hi(text, annotations):
     """
@@ -480,6 +556,8 @@ def convert_tei_root_to_text(root):
     - <gap /> elements are removed
     - <unclear><supplied>foo</supplied></unclear> becomes "foo"
     - <choice><orig>foo</orig><corr>bar</corr></choice> becomes "bar"
+    - Milestones are tracked in annotations but removed from text
+    - Head elements are converted to hi annotations with rend='head'
     - All other XML tags are stripped
     - XML-encoded characters (&gt;, etc.) are converted to their normal representation
     
@@ -503,11 +581,51 @@ def convert_tei_root_to_text(root):
         logging.error("No body element found in the TEI document", file=sys.stderr)
         return None
     
+    # Check if xml:space="preserve" is present
+    xml_space_preserve = body[0].get('{http://www.w3.org/XML/1998/namespace}space') == 'preserve'
+    
     # Create a deep copy of the body to avoid modifying the original tree
     body_copy = etree.Element("body")
     body_copy.extend(body[0].xpath("./*"))
     
     # Process the TEI elements
+    
+    # Handle div elements - mark boundaries for chunking if not xml:space="preserve"
+    if not xml_space_preserve:
+        for div in body_copy.xpath('.//tei:div', namespaces=namespaces):
+            # Add markers to track div boundaries
+            div_start_marker = etree.Element("div_start_marker")
+            div_end_marker = etree.Element("div_end_marker")
+            
+            # Insert start marker as first child
+            if len(div) > 0:
+                div.insert(0, div_start_marker)
+            else:
+                div_start_marker.text = div.text if div.text else ""
+                div.text = ""
+                div.append(div_start_marker)
+            
+            # Append end marker as last child
+            div.append(div_end_marker)
+    
+    # Handle milestone elements - convert to markers for coordinate tracking
+    for milestone in body_copy.xpath('.//tei:milestone', namespaces=namespaces):
+        milestone_id = milestone.get('{http://www.w3.org/XML/1998/namespace}id')
+        if milestone_id:
+            milestone_marker = etree.Element("milestone_marker")
+            milestone_marker.text = milestone_id
+            replace_element(milestone, milestone_marker)
+        else:
+            replace_element(milestone, None)
+    
+    # Handle head elements - convert to hi_head for annotation tracking
+    for head in body_copy.xpath('.//tei:head', namespaces=namespaces):
+        new_tag = etree.Element('hi_head')
+        new_tag.text = head.text
+        for child in head:
+            new_tag.append(deepcopy(child))
+        new_tag.tail = head.tail
+        replace_element(head, new_tag)
 
     # Remove all note elements
     for note in body_copy.xpath('.//tei:note', namespaces=namespaces):
@@ -581,19 +699,35 @@ def convert_tei_root_to_text(root):
     
     # Simple substitutions
     xml_str = xml_str.replace("\uFEFF", "")
-    # this also normalizes spaces at the beginning and end
-    xml_str = re.sub(r'[\r\n\t ]*</?(?:body|p)(?: +[^>]+)*>[\r\n\t ]*', "", xml_str, flags=re.DOTALL)
+    # Handle div and p tags based on xml:space attribute
+    if xml_space_preserve:
+        # Old behavior: just remove tags, normalize spaces at beginning and end
+        xml_str = re.sub(r'[\r\n\t ]*</?(?:body|p|div)(?: +[^>]+)*>[\r\n\t ]*', "", xml_str, flags=re.DOTALL)
+    else:
+        # New behavior: add two line breaks around divs and ps
+        xml_str = re.sub(r'<div(?: +[^>]+)*>', "\n\n", xml_str, flags=re.DOTALL)
+        xml_str = re.sub(r'</div>', "\n\n", xml_str, flags=re.DOTALL)
+        xml_str = re.sub(r'<p(?: +[^>]+)*>', "\n\n", xml_str, flags=re.DOTALL)
+        xml_str = re.sub(r'</p>', "\n\n", xml_str, flags=re.DOTALL)
+        xml_str = re.sub(r'</?body(?: +[^>]+)*>', "", xml_str, flags=re.DOTALL)
     xml_str = re.sub(r'(?:\n\s*)?<text_marker>(.*?)</text_marker>(?:\n\s*)?', r'\1', xml_str, flags=re.DOTALL)
     xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str, flags=re.DOTALL)
 
     annotations = {}
     #print(debug_annotations(xml_str, annotations))
+    if not xml_space_preserve:
+        xml_str = convert_div_boundaries(xml_str, annotations)
+    xml_str = convert_milestones(xml_str, annotations)
     xml_str = convert_pages(xml_str, annotations)
     #print(debug_annotations(xml_str, annotations))
     xml_str = convert_hi(xml_str, annotations)
     xml_str = remove_other_markers(xml_str, annotations)
     xml_str = unescape_xml(xml_str, annotations)
     xml_str = normalize_new_lines(xml_str, annotations)
+    
+    # Limit to max 2 consecutive line breaks if not xml:space="preserve"
+    if not xml_space_preserve:
+        xml_str = re.sub(r'\n{3,}', '\n\n', xml_str)
 
     return xml_str, annotations, source_path
 
