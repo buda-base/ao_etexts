@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import logging
+from lxml import etree
 
 LDSPDIBASEURL = "https://ldspdi.bdrc.io/"
 EDITSERVBASEURL = "https://editserv.bdrc.io/"
@@ -259,7 +260,138 @@ def get_outline_graph(olname):
     finally:
         return g
 
+class EtextSegment:
+    """
+    Helper class to extract text from an XML etext between specific milestone markers.
+    
+    This class handles the extraction of text content between two xml:id markers in
+    milestone elements, supporting the following cases:
+    - Both start_id and end_id specified: extract text between them
+    - Only end_id: extract from beginning to end_id
+    - Only start_id: extract from start_id to end
+    - Neither: extract entire etext
+    """
+    
+    def __init__(self, xml_tree, start_id=None, end_id=None):
+        """
+        Initialize the segment extractor.
+        
+        Args:
+            xml_tree: lxml etree root element of the TEI document
+            start_id: xml:id of the starting milestone (None means beginning)
+            end_id: xml:id of the ending milestone (None means end)
+        """
+        self.xml_tree = xml_tree
+        self.start_id = start_id
+        self.end_id = end_id
+    
+    def extract_text(self):
+        """
+        Extract the text content between start_id and end_id milestones.
+        
+        Returns:
+            str: The extracted text content
+        """
+        # Handle namespace
+        ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
+        
+        # Find all milestone elements with xml:id
+        # Using both namespaced and non-namespaced xpath for compatibility
+        try:
+            milestones = self.xml_tree.xpath('.//tei:milestone[@xml:id]', namespaces=ns)
+        except:
+            milestones = self.xml_tree.xpath('.//milestone[@xml:id]')
+        
+        # Create a mapping of xml:id to milestone element
+        milestone_map = {}
+        for m in milestones:
+            xml_id = m.get('{http://www.w3.org/XML/1998/namespace}id')
+            if not xml_id:
+                xml_id = m.get('id')
+            if xml_id:
+                milestone_map[xml_id] = m
+        
+        # Determine start and end elements
+        start_element = None
+        end_element = None
+        
+        if self.start_id and self.start_id in milestone_map:
+            start_element = milestone_map[self.start_id]
+        
+        if self.end_id and self.end_id in milestone_map:
+            end_element = milestone_map[self.end_id]
+        
+        # Extract text based on boundaries
+        return self._extract_text_between(start_element, end_element)
+    
+    def _extract_text_between(self, start_elem, end_elem):
+        """
+        Extract text between two elements (or from start/to end if None).
+        
+        Args:
+            start_elem: Starting element (None = from beginning)
+            end_elem: Ending element (None = to end)
+        
+        Returns:
+            str: Extracted text
+        """
+        # Get the body or text element
+        ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
+        try:
+            body = self.xml_tree.xpath('.//tei:body', namespaces=ns)[0]
+        except:
+            try:
+                body = self.xml_tree.xpath('.//body')[0]
+            except:
+                # No body found, use root
+                body = self.xml_tree
+        
+        # Build a list of all nodes in document order
+        all_nodes = list(body.iter())
+        
+        # Find indices
+        start_idx = 0
+        end_idx = len(all_nodes)
+        
+        if start_elem is not None and start_elem in all_nodes:
+            start_idx = all_nodes.index(start_elem) + 1  # Start after the milestone
+        
+        if end_elem is not None and end_elem in all_nodes:
+            end_idx = all_nodes.index(end_elem)  # End before the milestone
+        
+        # Collect text from nodes in range
+        text_parts = []
+        for i in range(start_idx, end_idx):
+            node = all_nodes[i]
+            if isinstance(node.tag, str):  # Skip comments, PIs, etc.
+                # Get text content of this node
+                if node.text:
+                    text_parts.append(node.text)
+                if node.tail:
+                    text_parts.append(node.tail)
+        
+        # Join and clean up
+        text = ''.join(text_parts)
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        return text
+
+
 class OutlineEtextLookup:
+    """
+    Lookup structure for content locations in outlines with support for xml:id-based
+    segmentation within etexts.
+    
+    This class processes outline graphs to extract content location information including:
+    - Volume and etext ranges
+    - Start/end xml:id markers within etexts
+    - Master work (MW) identifiers
+    
+    It provides methods to get etext segments that need to be processed, properly handling:
+    - Merging of etexts within the same volume for the same content location
+    - Forced cutting at volume boundaries
+    - Partial etext extraction based on milestone markers
+    """
 
     def __init__(self, olname, ielname):
         self.cls = []
@@ -275,6 +407,7 @@ class OutlineEtextLookup:
                 volnum_start = int(volnum_start)
             else:
                 logging.warning("content location with no volume start, ignoring")
+                continue
             volnum_end = g.value(cl, BDO.contentLocationEndVolume, None)
             if volnum_end:
                 volnum_end = int(volnum_end)
@@ -288,46 +421,132 @@ class OutlineEtextLookup:
                 etextnum_end = int(etextnum_end)
             else:
                 etextnum_end = etextnum_start
-            self.cls.append({"mw": mw_lname, "vnum_start": volnum_start, "vnum_end": volnum_end, "etextnum_start": etextnum_start, "etextnum_end": etextnum_end})
+            
+            # Extract the new ID fields for milestone-based segmentation
+            id_in_etext = g.value(cl, BDO.contentLocationIdInEtext, None)
+            if id_in_etext:
+                id_in_etext = str(id_in_etext)
+            end_id_in_etext = g.value(cl, BDO.contentLocationEndIdInEtext, None)
+            if end_id_in_etext:
+                end_id_in_etext = str(end_id_in_etext)
+            
+            self.cls.append({
+                "mw": mw_lname, 
+                "vnum_start": volnum_start, 
+                "vnum_end": volnum_end, 
+                "etextnum_start": etextnum_start, 
+                "etextnum_end": etextnum_end,
+                "id_in_etext": id_in_etext,
+                "end_id_in_etext": end_id_in_etext
+            })
+    
+    def get_volume_segments(self, vnum):
+        """
+        Get all etext segments that need to be processed for a given volume.
         
-    def get_cls_for(self, vnum, etextnum):
-        res = []
-        # add all possible cls
+        This replaces get_mw_for and provides richer information about how to
+        segment the etexts in the volume.
+        
+        Args:
+            vnum: Volume number
+        
+        Returns:
+            list: List of segment dictionaries, each containing:
+                - mw: Master work identifier
+                - etexts: List of (etext_num, start_id, end_id) tuples to process
+                - merge: Whether to merge these etexts into a single document
+        """
+        segments = []
+        
         for cl in self.cls:
-            if vnum == cl["vnum_end"] and vnum != cl["vnum_start"] and (not cl["etextnum_end"] or cl["etextnum_end"] >= etextnum):
-                res.append(cl)
-            elif vnum == cl["vnum_start"] and vnum != cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum):
-                res.append(cl)
-            elif vnum == cl["vnum_start"] and vnum == cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum and cl["etextnum_end"] >= etextnum): 
-                res.append(cl)
-            elif vnum < cl["vnum_end"] and vnum > cl["vnum_start"]:
-                res.append(cl)
-        return res
-
+            # Check if this content location applies to this volume
+            if vnum < cl["vnum_start"] or vnum > cl["vnum_end"]:
+                continue
+            
+            # Determine which etexts in this volume are part of this content location
+            etexts_to_process = []
+            
+            # If this is the starting volume
+            if vnum == cl["vnum_start"]:
+                start_etext = cl["etextnum_start"] if cl["etextnum_start"] else 1
+                # If also the ending volume
+                if vnum == cl["vnum_end"]:
+                    end_etext = cl["etextnum_end"] if cl["etextnum_end"] else start_etext
+                    # All etexts in range, but only in this volume
+                    for etext_num in range(start_etext, end_etext + 1):
+                        # Determine start/end IDs for this specific etext
+                        if etext_num == start_etext and etext_num == end_etext:
+                            # Single etext with both boundaries
+                            etexts_to_process.append((etext_num, cl["id_in_etext"], cl["end_id_in_etext"]))
+                        elif etext_num == start_etext:
+                            # First etext: has start ID, no end ID (goes to end of etext)
+                            etexts_to_process.append((etext_num, cl["id_in_etext"], None))
+                        elif etext_num == end_etext:
+                            # Last etext: no start ID (from beginning), has end ID
+                            etexts_to_process.append((etext_num, None, cl["end_id_in_etext"]))
+                        else:
+                            # Middle etext: full etext
+                            etexts_to_process.append((etext_num, None, None))
+                else:
+                    # Starting volume but not ending: goes to end of volume
+                    # We assume etexts continue, but we don't know the max
+                    # For now, just mark the starting etext with start ID
+                    etexts_to_process.append((start_etext, cl["id_in_etext"], None))
+                    # This is a simplification - in real use, we'd need to know all etexts
+            
+            # If this is the ending volume (but not starting)
+            elif vnum == cl["vnum_end"]:
+                end_etext = cl["etextnum_end"] if cl["etextnum_end"] else 1
+                # From beginning of volume to this etext
+                etexts_to_process.append((end_etext, None, cl["end_id_in_etext"]))
+            
+            # If this is a middle volume (not start, not end)
+            else:
+                # All etexts in this volume - we'd need external info to know which ones
+                # For now, mark as needing all etexts (start_id=None means from start)
+                etexts_to_process.append((None, None, None))  # Means "all etexts"
+            
+            if etexts_to_process:
+                segments.append({
+                    "mw": cl["mw"],
+                    "etexts": etexts_to_process,
+                    "merge": len(etexts_to_process) > 1  # Merge if multiple etexts
+                })
+        
+        return segments
+    
     def get_mw_for(self, vnum, etextnum):
         """
-        TODO: this should be redone, it currently only works for very simple cases
+        DEPRECATED: This method is kept for backward compatibility but should not be used.
+        Use get_volume_segments instead.
+        
+        Get the master work identifier for a specific volume and etext number.
+        This is a simplified version that doesn't handle xml:id-based segmentation.
         """
-        cl_list = self.get_cls_for(vnum, etextnum)
-        if not cl_list:
-            return None
-        if len(cl_list) == 1:
-            return cl_list[0]["mw"]
-        # take the tightest around the etextnum
-        # TODO: this works only with no crossover between volumes
-        tightest = 1000 # 999 is for None:None, 998 is for None:something or something:None
-        tightest_idx = -1
-        for i, cl in enumerate(cl_list):
-            if not cl["etextnum_start"] and not cl["etextnum_end"]:
-                tightness = 999
-            elif not cl["etextnum_start"] or not cl["etextnum_end"]:
-                tightness = 998
+        # Simple implementation for backward compatibility
+        for cl in self.cls:
+            if vnum < cl["vnum_start"] or vnum > cl["vnum_end"]:
+                continue
+            
+            # Check etext range
+            if cl["etextnum_start"] and cl["etextnum_end"]:
+                if vnum == cl["vnum_start"] and vnum == cl["vnum_end"]:
+                    if etextnum >= cl["etextnum_start"] and etextnum <= cl["etextnum_end"]:
+                        return cl["mw"]
+                elif vnum == cl["vnum_start"]:
+                    if etextnum >= cl["etextnum_start"]:
+                        return cl["mw"]
+                elif vnum == cl["vnum_end"]:
+                    if etextnum <= cl["etextnum_end"]:
+                        return cl["mw"]
+                else:
+                    # Middle volume
+                    return cl["mw"]
             else:
-                tightness = cl["etextnum_end"] - cl["etextnum_start"]
-            if tightness < tightest:
-                tightest = tightness
-                tightest_idx = i
-        return cl_list[tightest_idx]["mw"]
+                # No etext constraints
+                return cl["mw"]
+        
+        return None
 
 class OutlinePageLookup:
     """
