@@ -2,6 +2,8 @@
 
 This document demonstrates how to use the enhanced `OutlineEtextLookup` class with support for `contentLocationIdInEtext` and `contentLocationEndIdInEtext`.
 
+**Note**: The examples below use placeholder functions like `load_etext_xml()`, `process_document()`, etc. These represent user-defined functions that you would implement according to your specific needs.
+
 ## Basic Concepts
 
 ### Milestone-based Segmentation
@@ -22,6 +24,12 @@ Segments are always cut at volume boundaries. If a content location spans multip
 from bdrc_etext_sync.buda_api import OutlineEtextLookup, EtextSegment
 from lxml import etree
 
+# Helper function - you would implement this based on your file storage
+def load_etext_xml(vol_name, etext_num):
+    """Load and parse an etext XML file"""
+    # Your implementation here
+    pass
+
 # Initialize the lookup
 oel = OutlineEtextLookup("O12345", "IE67890")
 
@@ -35,7 +43,7 @@ for segment in segments:
     
     for etext_num, start_id, end_id in segment["etexts"]:
         # Load the etext XML
-        xml_tree = load_etext_xml(etext_num)
+        xml_tree = load_etext_xml("V001", etext_num)
         
         # Extract the text segment
         extractor = EtextSegment(xml_tree, start_id, end_id)
@@ -54,6 +62,12 @@ When a content location spans multiple etexts in the same volume, they should be
 #        contentLocationEndEtext=3, contentLocationIdInEtext="m1",
 #        contentLocationEndIdInEtext="m3"
 
+# Helper function - you would implement this based on your needs
+def process_document(mw_lname, text):
+    """Process a single document"""
+    # Your implementation here
+    pass
+
 segments = oel.get_volume_segments(1)
 
 for segment in segments:
@@ -62,7 +76,7 @@ for segment in segments:
         all_text_parts = []
         
         for etext_num, start_id, end_id in segment["etexts"]:
-            xml_tree = load_etext_xml(etext_num)
+            xml_tree = load_etext_xml("V001", etext_num)
             extractor = EtextSegment(xml_tree, start_id, end_id)
             text = extractor.extract_text()
             all_text_parts.append(text)
@@ -75,7 +89,7 @@ for segment in segments:
     else:
         # Single etext, no merge needed
         etext_num, start_id, end_id = segment["etexts"][0]
-        xml_tree = load_etext_xml(etext_num)
+        xml_tree = load_etext_xml("V001", etext_num)
         extractor = EtextSegment(xml_tree, start_id, end_id)
         text = extractor.extract_text()
         process_document(segment["mw"], text)
@@ -89,6 +103,12 @@ When a content location spans multiple volumes, process each volume separately:
 # Given: contentLocationVolume=1, contentLocationEndVolume=3,
 #        contentLocationEtext=2, contentLocationEndEtext=1,
 #        contentLocationIdInEtext="a", contentLocationEndIdInEtext="b"
+
+# Helper function - you would implement this based on your needs
+def process_segment(vol_num, etext_num, start_id, end_id):
+    """Process a segment for a specific volume and etext"""
+    # Your implementation here
+    pass
 
 # Process volume 1
 segments_v1 = oel.get_volume_segments(1)
@@ -189,6 +209,22 @@ if oel:
 For full feature support including milestone-based segmentation:
 
 ```python
+# Helper functions - you would implement these based on your needs
+def load_etext_xml(vol_name, etext_num):
+    """Load and parse an etext XML file"""
+    # Your implementation here
+    pass
+
+def process_merged_document(mw_lname, merged_content):
+    """Process a document created by merging multiple etexts"""
+    # Your implementation here
+    pass
+
+def process_document(mw_lname, text):
+    """Process a single document"""
+    # Your implementation here
+    pass
+
 # At volume processing level
 if oel:
     segments = oel.get_volume_segments(vol_num)
