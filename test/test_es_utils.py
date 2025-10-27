@@ -100,6 +100,47 @@ This is on a new line.</p>
         # Should not have new format features
         self.assertNotIn("milestones", annotations)
         self.assertNotIn("div_boundaries", annotations)
+    
+    def test_old_format_preserve_on_p_element(self):
+        """Test the old format with xml:space='preserve' on p element (not on body)"""
+        test_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text>
+    <body xml:lang="bo">
+      <p xml:space="preserve">
+<pb n="1a"/>
+<lb/>༄༅། །ཆོས་མངོན་པ་མཛོད་ཀྱི་འགྲེལ་པ་མངོན་པའི་རྒྱན་གྱི་དཀར་ཆག་དང་ས་བཅད་གླེང་བརྗོད་བཅས་བཞུགས་སོ༎
+<pb n="1b"/>
+<lb/>༄༅། །ཨོཾ་སྭ་སྟི། །གང་གི་མཚན་ཙམ་ལན་ཅིག་ཐོས་པས་ཀྱང་། །མཚམས་མེད་ལས་ལ་སྤྱོད་པའི་སྡིག་ཅན་ཡང་། །ཕྱི་མ་ངན་འགྲོའི་འཇིགས་ལས་སྐྱོབ་མཛད་
+<pb n="2a"/>
+<lb/>༄༅། །དབྱེ་བ་དང་། མཚན་ཉིད་དང་། དགོས་པ་དང་། གྲངས་ངེས་དང་། གོ་རིམས་ངེས་པ་ལྔ་བཤད་པ།
+</p>
+</body>
+</text>
+</TEI>
+"""
+        parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+        tree = etree.fromstring(test_xml.encode('utf-8'), parser)
+        
+        text, annotations, source_path = convert_tei_root_to_text(tree)
+        
+        # Check that Tibetan text is present
+        self.assertIn("༄༅།", text)
+        self.assertIn("ཆོས་མངོན་པ་མཛོད་ཀྱི་འགྲེལ་པ་མངོན་པའི་རྒྱན་གྱི་དཀར་ཆག", text)
+        
+        # Check that pages are properly tracked
+        self.assertIn("pages", annotations)
+        self.assertEqual(len(annotations["pages"]), 3)
+        
+        # Check page names
+        page_names = [p["pname"] for p in annotations["pages"]]
+        self.assertIn("1a", page_names)
+        self.assertIn("1b", page_names)
+        self.assertIn("2a", page_names)
+        
+        # Should not have new format features
+        self.assertNotIn("milestones", annotations)
+        self.assertNotIn("div_boundaries", annotations)
 
 
 class TestTEIConversionNewFormat(unittest.TestCase):
