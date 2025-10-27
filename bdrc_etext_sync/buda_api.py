@@ -283,7 +283,7 @@ class OutlineEtextLookup:
         for cl, _, _ in g.triples((None, BDO.contentLocationInstance, BDR[ielname])):
             mw = g.value(None, BDO.contentLocation, cl)
             mw_lname = to_lname(mw)
-            volnum_start = g.value(cl, BDO.contentLocationVolume, None)
+            volnum_start = g.value(cl, BDO.contentLocationVolume, 1)
             if volnum_start:
                 volnum_start = int(volnum_start)
             else:
@@ -294,7 +294,7 @@ class OutlineEtextLookup:
                 volnum_end = int(volnum_end)
             else:
                 volnum_end = volnum_start
-            etextnum_start = g.value(cl, BDO.contentLocationEtext, None)
+            etextnum_start = g.value(cl, BDO.contentLocationEtext, 1)
             if etextnum_start:
                 etextnum_start = int(etextnum_start)
             etextnum_end = g.value(cl, BDO.contentLocationEndEtext, None)
@@ -337,7 +337,7 @@ class OutlineEtextLookup:
                 applicable_cls.append(cl)
         return applicable_cls
     
-    def get_milestone_ids_for_volume(self, vnum):
+    def get_milestone_ids_for_etext(self, vnum, etextnum):
         """
         Get all milestone IDs referenced in the outline for a given volume.
         
@@ -352,45 +352,13 @@ class OutlineEtextLookup:
         """
         milestone_ids = set()
         for cl in self.cls:
-            if vnum >= cl["vnum_start"] and vnum <= cl["vnum_end"]:
+            if vnum == cl["vnum_start"] and etextnum == cl["etextnum_start"]:
                 if cl["id_in_etext"]:
                     milestone_ids.add(cl["id_in_etext"])
+            if vnum == cl["vnum_end"] and etextnum == cl["etextnum_end"]:
                 if cl["end_id_in_etext"]:
                     milestone_ids.add(cl["end_id_in_etext"])
         return milestone_ids
-    
-    def get_mw_for(self, vnum, etextnum):
-        """
-        DEPRECATED: This method is kept for backward compatibility.
-        
-        Get the master work identifier for a specific volume and etext number.
-        This is a simplified version that doesn't handle xml:id-based segmentation.
-        The segmentation logic is now in es_utils.py
-        """
-        # Simple implementation for backward compatibility
-        for cl in self.cls:
-            if vnum < cl["vnum_start"] or vnum > cl["vnum_end"]:
-                continue
-            
-            # Check etext range
-            if cl["etextnum_start"] and cl["etextnum_end"]:
-                if vnum == cl["vnum_start"] and vnum == cl["vnum_end"]:
-                    if etextnum >= cl["etextnum_start"] and etextnum <= cl["etextnum_end"]:
-                        return cl["mw"]
-                elif vnum == cl["vnum_start"]:
-                    if etextnum >= cl["etextnum_start"]:
-                        return cl["mw"]
-                elif vnum == cl["vnum_end"]:
-                    if etextnum <= cl["etextnum_end"]:
-                        return cl["mw"]
-                else:
-                    # Middle volume
-                    return cl["mw"]
-            else:
-                # No etext constraints
-                return cl["mw"]
-        
-        return None
 
 class OutlinePageLookup:
     """

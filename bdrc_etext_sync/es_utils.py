@@ -232,16 +232,16 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         logging.warning(f"No content locations found for volume {vol_num}, using root MW")
         return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version)
     
-    # Get all milestone IDs referenced in the outline for this volume
-    # This filters out milestones not in the outline to avoid too many segments
-    outline_milestone_ids = oel.get_milestone_ids_for_volume(vol_num)
-    
     # Build list of all milestone segments in order (only using outline-referenced milestones)
     all_segments = []
     volume_char_offset = 0
     
     for etext_data in converted_etexts:
         etext_num = etext_data["etext_num"]
+        # Get all milestone IDs referenced in the outline for this volume
+        # This filters out milestones not in the outline to avoid too many segments
+        outline_milestone_ids = oel.get_milestone_ids_for_volume(vol_num, etext_num)
+        
         text = etext_data["text"]
         annotations = etext_data["annotations"]
         milestones = annotations.get("milestones", {})
