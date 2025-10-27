@@ -259,110 +259,6 @@ def get_outline_graph(olname):
     finally:
         return g
 
-class EtextSegment:
-    """
-    Helper class to represent a segment of text within an etext, defined by milestone boundaries.
-    
-    This class works with already-converted text and milestone annotations (not XML).
-    It represents the space between two milestones and provides access to the text and
-    annotations for that segment.
-    """
-    
-    def __init__(self, text, annotations, start_id=None, end_id=None, etext_num=None):
-        """
-        Initialize an etext segment.
-        
-        Args:
-            text: The full text of the etext (already converted from XML)
-            annotations: Annotations dict with milestone positions and other data
-            start_id: xml:id of the starting milestone (None means beginning of etext)
-            end_id: xml:id of the ending milestone (None means end of etext)
-            etext_num: The etext number this segment belongs to
-        """
-        self.full_text = text
-        self.annotations = annotations
-        self.start_id = start_id
-        self.end_id = end_id
-        self.etext_num = etext_num
-        self.milestones = annotations.get("milestones", {})
-        
-        # Determine start and end positions
-        self.start_pos = 0
-        self.end_pos = len(text)
-        
-        if start_id and start_id in self.milestones:
-            self.start_pos = self.milestones[start_id]
-        elif start_id:
-            logging.warning(f"Start milestone '{start_id}' not found in etext {etext_num}")
-        
-        if end_id and end_id in self.milestones:
-            self.end_pos = self.milestones[end_id]
-        elif end_id:
-            logging.warning(f"End milestone '{end_id}' not found in etext {etext_num}")
-    
-    def get_text(self):
-        """
-        Get the text for this segment.
-        
-        Returns:
-            str: The text between start_pos and end_pos
-        """
-        return self.full_text[self.start_pos:self.end_pos]
-    
-    def get_annotations_for_segment(self, offset=0):
-        """
-        Get annotations adjusted for this segment.
-        
-        Args:
-            offset: Offset to add to all positions (for merging multiple segments)
-        
-        Returns:
-            dict: Adjusted annotations for this segment
-        """
-        segment_annotations = {}
-        
-        # Handle pages
-        if "pages" in self.annotations:
-            segment_annotations["pages"] = []
-            for page in self.annotations["pages"]:
-                if page["cstart"] >= self.start_pos and page["cstart"] < self.end_pos:
-                    new_page = page.copy()
-                    new_page["cstart"] = page["cstart"] - self.start_pos + offset
-                    new_page["cend"] = min(page["cend"], self.end_pos) - self.start_pos + offset
-                    segment_annotations["pages"].append(new_page)
-        
-        # Handle hi (highlights)
-        if "hi" in self.annotations:
-            segment_annotations["hi"] = []
-            for hi in self.annotations["hi"]:
-                if hi["cstart"] >= self.start_pos and hi["cstart"] < self.end_pos:
-                    new_hi = hi.copy()
-                    new_hi["cstart"] = hi["cstart"] - self.start_pos + offset
-                    new_hi["cend"] = min(hi["cend"], self.end_pos) - self.start_pos + offset
-                    segment_annotations["hi"].append(new_hi)
-        
-        # Handle milestones
-        if "milestones" in self.annotations:
-            segment_annotations["milestones"] = {}
-            for milestone_id, pos in self.annotations["milestones"].items():
-                if pos >= self.start_pos and pos < self.end_pos:
-                    segment_annotations["milestones"][milestone_id] = pos - self.start_pos + offset
-        
-        # Handle div_boundaries if present
-        if "div_boundaries" in self.annotations:
-            segment_annotations["div_boundaries"] = []
-            for boundary in self.annotations["div_boundaries"]:
-                if boundary["start"] >= self.start_pos and boundary["start"] < self.end_pos:
-                    new_boundary = boundary.copy()
-                    new_boundary["start"] = boundary["start"] - self.start_pos + offset
-                    new_boundary["end"] = min(boundary["end"], self.end_pos) - self.start_pos + offset
-                    segment_annotations["div_boundaries"].append(new_boundary)
-        
-        return segment_annotations
-    
-    def __repr__(self):
-        return f"EtextSegment(etext={self.etext_num}, start_id={self.start_id}, end_id={self.end_id}, pos={self.start_pos}:{self.end_pos})"
-
 
 class OutlineEtextLookup:
     """
@@ -440,6 +336,28 @@ class OutlineEtextLookup:
             if vnum >= cl["vnum_start"] and vnum <= cl["vnum_end"]:
                 applicable_cls.append(cl)
         return applicable_cls
+    
+    def get_milestone_ids_for_volume(self, vnum):
+        """
+        Get all milestone IDs referenced in the outline for a given volume.
+        
+        This is used to filter out milestones that are not in the outline,
+        avoiding creation of too many unnecessary segments.
+        
+        Args:
+            vnum: Volume number
+        
+        Returns:
+            set: Set of milestone IDs referenced in content locations for this volume
+        """
+        milestone_ids = set()
+        for cl in self.cls:
+            if vnum >= cl["vnum_start"] and vnum <= cl["vnum_end"]:
+                if cl["id_in_etext"]:
+                    milestone_ids.add(cl["id_in_etext"])
+                if cl["end_id_in_etext"]:
+                    milestone_ids.add(cl["end_id_in_etext"])
+        return milestone_ids
     
     def get_mw_for(self, vnum, etextnum):
         """

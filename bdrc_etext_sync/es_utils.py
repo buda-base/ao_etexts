@@ -12,11 +12,126 @@ import fs.path
 from opensearchpy import OpenSearch, helpers
 
 from .chunkers import TibetanEasyChunker
-from .buda_api import OutlineEtextLookup, EtextSegment
+from .buda_api import OutlineEtextLookup
 from .fs_utils import open_filesystem
 
 INDEX = "bdrc_prod"
 DEBUG = False
+
+
+class EtextSegment:
+    """
+    Helper class to represent a segment of text within an etext, defined by milestone boundaries.
+    
+    This class works with already-converted text and milestone annotations (not XML).
+    It represents the space between two milestones and provides access to the text and
+    annotations for that segment.
+    
+    The volume_char_offset property tracks the absolute character position of this segment
+    within the entire volume (across all etexts), which ensures character coordinates are
+    continuous per volume rather than being reset for each etext.
+    """
+    
+    def __init__(self, text, annotations, start_id=None, end_id=None, etext_num=None):
+        """
+        Initialize an etext segment.
+        
+        Args:
+            text: The full text of the etext (already converted from XML)
+            annotations: Annotations dict with milestone positions and other data
+            start_id: xml:id of the starting milestone (None means beginning of etext)
+            end_id: xml:id of the ending milestone (None means end of etext)
+            etext_num: The etext number this segment belongs to
+        """
+        self.full_text = text
+        self.annotations = annotations
+        self.start_id = start_id
+        self.end_id = end_id
+        self.etext_num = etext_num
+        self.milestones = annotations.get("milestones", {})
+        
+        # Determine start and end positions within this etext
+        self.start_pos = 0
+        self.end_pos = len(text)
+        
+        if start_id and start_id in self.milestones:
+            self.start_pos = self.milestones[start_id]
+        elif start_id:
+            logging.warning(f"Start milestone '{start_id}' not found in etext {etext_num}")
+        
+        if end_id and end_id in self.milestones:
+            self.end_pos = self.milestones[end_id]
+        elif end_id:
+            logging.warning(f"End milestone '{end_id}' not found in etext {etext_num}")
+        
+        # volume_char_offset will be set externally to track absolute position in volume
+        # This is the character position of start_pos within the entire volume
+        self.volume_char_offset = 0
+    
+    def get_text(self):
+        """
+        Get the text for this segment.
+        
+        Returns:
+            str: The text between start_pos and end_pos
+        """
+        return self.full_text[self.start_pos:self.end_pos]
+    
+    def get_annotations_for_segment(self, offset=0):
+        """
+        Get annotations adjusted for this segment.
+        
+        Args:
+            offset: Additional offset to add to all positions (for merging multiple segments
+                   into a single document). This is relative to the document being built,
+                   not the volume.
+        
+        Returns:
+            dict: Adjusted annotations for this segment
+        """
+        segment_annotations = {}
+        
+        # Handle pages
+        if "pages" in self.annotations:
+            segment_annotations["pages"] = []
+            for page in self.annotations["pages"]:
+                if page["cstart"] >= self.start_pos and page["cstart"] < self.end_pos:
+                    new_page = page.copy()
+                    new_page["cstart"] = page["cstart"] - self.start_pos + offset
+                    new_page["cend"] = min(page["cend"], self.end_pos) - self.start_pos + offset
+                    segment_annotations["pages"].append(new_page)
+        
+        # Handle hi (highlights)
+        if "hi" in self.annotations:
+            segment_annotations["hi"] = []
+            for hi in self.annotations["hi"]:
+                if hi["cstart"] >= self.start_pos and hi["cstart"] < self.end_pos:
+                    new_hi = hi.copy()
+                    new_hi["cstart"] = hi["cstart"] - self.start_pos + offset
+                    new_hi["cend"] = min(hi["cend"], self.end_pos) - self.start_pos + offset
+                    segment_annotations["hi"].append(new_hi)
+        
+        # Handle milestones
+        if "milestones" in self.annotations:
+            segment_annotations["milestones"] = {}
+            for milestone_id, pos in self.annotations["milestones"].items():
+                if pos >= self.start_pos and pos < self.end_pos:
+                    segment_annotations["milestones"][milestone_id] = pos - self.start_pos + offset
+        
+        # Handle div_boundaries if present
+        if "div_boundaries" in self.annotations:
+            segment_annotations["div_boundaries"] = []
+            for boundary in self.annotations["div_boundaries"]:
+                if boundary["start"] >= self.start_pos and boundary["start"] < self.end_pos:
+                    new_boundary = boundary.copy()
+                    new_boundary["start"] = boundary["start"] - self.start_pos + offset
+                    new_boundary["end"] = min(boundary["end"], self.end_pos) - self.start_pos + offset
+                    segment_annotations["div_boundaries"].append(new_boundary)
+        
+        return segment_annotations
+    
+    def __repr__(self):
+        return f"EtextSegment(etext={self.etext_num}, start_id={self.start_id}, end_id={self.end_id}, pos={self.start_pos}:{self.end_pos}, vol_offset={self.volume_char_offset})"
 
 CLIENT = None
 def get_os_client():
@@ -102,10 +217,11 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
     
     Algorithm per @eroux:
     1. Convert all etexts (already done)
-    2. Iterate over each etext segment (space between two milestones)
-    3. Detect document boundaries based on outline
-    4. When outline signals end of text, finish doc and start new one
-    5. Handle overlaps and gaps
+    2. Filter milestones to only those referenced in outline (to avoid creating too many segments)
+    3. Iterate over each etext segment (space between two outline-referenced milestones)
+    4. Detect document boundaries based on outline
+    5. When outline signals end of text, finish doc and start new one
+    6. Handle overlaps and gaps
     
     Character coordinates are continuous per volume.
     """
@@ -116,7 +232,11 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         logging.warning(f"No content locations found for volume {vol_num}, using root MW")
         return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version)
     
-    # Build list of all milestone segments in order
+    # Get all milestone IDs referenced in the outline for this volume
+    # This filters out milestones not in the outline to avoid too many segments
+    outline_milestone_ids = oel.get_milestone_ids_for_volume(vol_num)
+    
+    # Build list of all milestone segments in order (only using outline-referenced milestones)
     all_segments = []
     volume_char_offset = 0
     
@@ -126,24 +246,34 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         annotations = etext_data["annotations"]
         milestones = annotations.get("milestones", {})
         
-        if milestones:
-            # Sort milestones by position
-            sorted_milestones = sorted(milestones.items(), key=lambda x: x[1])
+        if milestones and outline_milestone_ids:
+            # Filter to only milestones referenced in the outline
+            relevant_milestones = {m_id: pos for m_id, pos in milestones.items() 
+                                  if m_id in outline_milestone_ids}
             
-            # Create segments: start -> m1, m1 -> m2, ..., last_m -> end
-            prev_id = None
-            for i, (m_id, m_pos) in enumerate(sorted_milestones):
-                segment = EtextSegment(text, annotations, prev_id, m_id, etext_num)
+            if relevant_milestones:
+                # Sort milestones by position
+                sorted_milestones = sorted(relevant_milestones.items(), key=lambda x: x[1])
+                
+                # Create segments: start -> m1, m1 -> m2, ..., last_m -> end
+                prev_id = None
+                for i, (m_id, m_pos) in enumerate(sorted_milestones):
+                    segment = EtextSegment(text, annotations, prev_id, m_id, etext_num)
+                    segment.volume_char_offset = volume_char_offset + segment.start_pos
+                    all_segments.append(segment)
+                    prev_id = m_id
+                
+                # Last segment: from last milestone to end
+                segment = EtextSegment(text, annotations, prev_id, None, etext_num)
                 segment.volume_char_offset = volume_char_offset + segment.start_pos
                 all_segments.append(segment)
-                prev_id = m_id
-            
-            # Last segment: from last milestone to end
-            segment = EtextSegment(text, annotations, prev_id, None, etext_num)
-            segment.volume_char_offset = volume_char_offset + segment.start_pos
-            all_segments.append(segment)
+            else:
+                # No relevant milestones in this etext, treat whole etext as one segment
+                segment = EtextSegment(text, annotations, None, None, etext_num)
+                segment.volume_char_offset = volume_char_offset
+                all_segments.append(segment)
         else:
-            # No milestones: whole etext is one segment
+            # No milestones or no outline milestone IDs: whole etext is one segment
             segment = EtextSegment(text, annotations, None, None, etext_num)
             segment.volume_char_offset = volume_char_offset
             all_segments.append(segment)
