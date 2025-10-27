@@ -387,14 +387,16 @@ def convert_pages(text, annotations):
 def convert_milestones(text, annotations):
     """
     Replaces <milestone_marker>{id}</milestone_marker> with empty string
-    and tracks the milestone coordinates in annotations
+    and tracks the milestone coordinates in annotations.
+    Only consumes leading whitespace to avoid eating spacing between elements.
     """
     milestone_coords = {}
     def repl_milestone_marker(m, cstart):
         milestone_id = m.group("id")
         milestone_coords[milestone_id] = cstart
         return ""
-    pat_str = r'[\r\n\s]*<milestone_marker>(?P<id>.*?)</milestone_marker>[\r\n\s]*'
+    # Only consume leading whitespace, not trailing
+    pat_str = r'[\r\n\s]*<milestone_marker>(?P<id>.*?)</milestone_marker>'
     output = get_string(text, pat_str, repl_milestone_marker, annotations)
     if milestone_coords:
         annotations["milestones"] = milestone_coords
@@ -403,23 +405,32 @@ def convert_milestones(text, annotations):
 def convert_div_boundaries(text, annotations):
     """
     Replaces <div_start_marker/> and <div_end_marker/> with empty strings
-    and tracks div boundaries for chunking
+    and tracks div boundaries for chunking.
+    Div end markers add spacing to separate adjacent divs.
     """
     div_boundaries = []
-    def repl_div_start_marker(m, cstart):
-        div_boundaries.append({"start": cstart})
-        return ""
-    def repl_div_end_marker(m, cstart):
-        if div_boundaries:
-            div_boundaries[-1]["end"] = cstart
+    current_div_index = [-1]  # Use list to allow modification in nested function
+    
+    def repl_div_marker(m, cstart):
+        marker = m.group(0)
+        if 'div_start_marker' in marker:
+            div_boundaries.append({"start": cstart, "end": -1})
+            current_div_index[0] += 1
+            return ""  # No spacing needed at div start
+        elif 'div_end_marker' in marker:
+            if current_div_index[0] >= 0 and current_div_index[0] < len(div_boundaries):
+                # Record the position before adding spacing
+                div_boundaries[current_div_index[0]]["end"] = cstart
+            return "\n\n"  # Add spacing after div end to separate adjacent divs
         return ""
     
-    # Remove start markers
-    pat_str = r'<div_start_marker\s*/>'
-    output = get_string(text, pat_str, repl_div_start_marker, annotations)
-    # Remove end markers
-    pat_str = r'<div_end_marker\s*/>'
-    output = get_string(output, pat_str, repl_div_end_marker, annotations)
+    # Remove both markers in one pass
+    pat_str = r'<div_(start|end)_marker\s*/>'
+    output = get_string(text, pat_str, repl_div_marker, annotations)
+    
+    # Filter out any incomplete boundaries and adjust end positions
+    # (end positions were recorded before we added the \n\n)
+    div_boundaries = [b for b in div_boundaries if b["end"] != -1]
     
     if div_boundaries:
         annotations["div_boundaries"] = div_boundaries
