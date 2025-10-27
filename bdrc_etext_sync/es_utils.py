@@ -278,14 +278,20 @@ def correct_position(current_position, positions, diffs):
     return current_position + diffs[previous_position_i-1]
 
 def apply_position_diffs(positions, diffs, annotations):
-    """Apply position diffs to annotations, skipping special keys."""
+    """Apply position diffs to annotations, handling special keys appropriately."""
     for type, ann_list in annotations.items():
-        if type in ("milestones", "div_boundaries"):
-            # These have special structure, skip them
+        if type == "milestones":
+            # Milestones is a dict of id -> coordinate, correct each coordinate
+            for milestone_id in ann_list:
+                ann_list[milestone_id] = correct_position(ann_list[milestone_id], positions, diffs)
+        elif type == "div_boundaries":
+            # Div boundaries have special structure, skip them
             continue
-        for ann in ann_list:
-            ann["cstart"] = correct_position(ann["cstart"], positions, diffs)
-            ann["cend"] = correct_position(ann["cend"], positions, diffs) 
+        else:
+            # Regular annotations are lists of dicts with cstart/cend
+            for ann in ann_list:
+                ann["cstart"] = correct_position(ann["cstart"], positions, diffs)
+                ann["cend"] = correct_position(ann["cend"], positions, diffs) 
 
 def get_string(orig, pattern_string , repl_fun, annotations):
     p = re.compile(pattern_string, flags = re.MULTILINE | re.DOTALL)
