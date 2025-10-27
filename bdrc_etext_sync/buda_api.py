@@ -259,7 +259,20 @@ def get_outline_graph(olname):
     finally:
         return g
 
+
 class OutlineEtextLookup:
+    """
+    Lookup structure for content locations in outlines with support for xml:id-based
+    segmentation within etexts.
+    
+    This class processes outline graphs to extract content location information including:
+    - Volume and etext ranges
+    - Start/end xml:id markers within etexts
+    - Master work (MW) identifiers
+    
+    The outline information is used by es_utils.py to segment converted etexts based on
+    milestone positions.
+    """
 
     def __init__(self, olname, ielname):
         self.cls = []
@@ -275,6 +288,7 @@ class OutlineEtextLookup:
                 volnum_start = int(volnum_start)
             else:
                 logging.warning("content location with no volume start, ignoring")
+                continue
             volnum_end = g.value(cl, BDO.contentLocationEndVolume, None)
             if volnum_end:
                 volnum_end = int(volnum_end)
@@ -288,46 +302,95 @@ class OutlineEtextLookup:
                 etextnum_end = int(etextnum_end)
             else:
                 etextnum_end = etextnum_start
-            self.cls.append({"mw": mw_lname, "vnum_start": volnum_start, "vnum_end": volnum_end, "etextnum_start": etextnum_start, "etextnum_end": etextnum_end})
+            
+            # Extract the ID fields for milestone-based segmentation
+            id_in_etext = g.value(cl, BDO.contentLocationIdInEtext, None)
+            if id_in_etext:
+                id_in_etext = str(id_in_etext)
+            end_id_in_etext = g.value(cl, BDO.contentLocationEndIdInEtext, None)
+            if end_id_in_etext:
+                end_id_in_etext = str(end_id_in_etext)
+            
+            self.cls.append({
+                "mw": mw_lname, 
+                "vnum_start": volnum_start, 
+                "vnum_end": volnum_end, 
+                "etextnum_start": etextnum_start, 
+                "etextnum_end": etextnum_end,
+                "id_in_etext": id_in_etext,
+                "end_id_in_etext": end_id_in_etext
+            })
+    
+    def get_content_locations_for_volume(self, vnum):
+        """
+        Get all content locations that apply to a given volume.
         
-    def get_cls_for(self, vnum, etextnum):
-        res = []
-        # add all possible cls
+        Args:
+            vnum: Volume number
+        
+        Returns:
+            list: List of content location dictionaries applicable to this volume
+        """
+        applicable_cls = []
         for cl in self.cls:
-            if vnum == cl["vnum_end"] and vnum != cl["vnum_start"] and (not cl["etextnum_end"] or cl["etextnum_end"] >= etextnum):
-                res.append(cl)
-            elif vnum == cl["vnum_start"] and vnum != cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum):
-                res.append(cl)
-            elif vnum == cl["vnum_start"] and vnum == cl["vnum_end"] and (not cl["etextnum_start"] or cl["etextnum_start"] <= etextnum and cl["etextnum_end"] >= etextnum): 
-                res.append(cl)
-            elif vnum < cl["vnum_end"] and vnum > cl["vnum_start"]:
-                res.append(cl)
-        return res
-
+            if vnum >= cl["vnum_start"] and vnum <= cl["vnum_end"]:
+                applicable_cls.append(cl)
+        return applicable_cls
+    
+    def get_milestone_ids_for_volume(self, vnum):
+        """
+        Get all milestone IDs referenced in the outline for a given volume.
+        
+        This is used to filter out milestones that are not in the outline,
+        avoiding creation of too many unnecessary segments.
+        
+        Args:
+            vnum: Volume number
+        
+        Returns:
+            set: Set of milestone IDs referenced in content locations for this volume
+        """
+        milestone_ids = set()
+        for cl in self.cls:
+            if vnum >= cl["vnum_start"] and vnum <= cl["vnum_end"]:
+                if cl["id_in_etext"]:
+                    milestone_ids.add(cl["id_in_etext"])
+                if cl["end_id_in_etext"]:
+                    milestone_ids.add(cl["end_id_in_etext"])
+        return milestone_ids
+    
     def get_mw_for(self, vnum, etextnum):
         """
-        TODO: this should be redone, it currently only works for very simple cases
+        DEPRECATED: This method is kept for backward compatibility.
+        
+        Get the master work identifier for a specific volume and etext number.
+        This is a simplified version that doesn't handle xml:id-based segmentation.
+        The segmentation logic is now in es_utils.py
         """
-        cl_list = self.get_cls_for(vnum, etextnum)
-        if not cl_list:
-            return None
-        if len(cl_list) == 1:
-            return cl_list[0]["mw"]
-        # take the tightest around the etextnum
-        # TODO: this works only with no crossover between volumes
-        tightest = 1000 # 999 is for None:None, 998 is for None:something or something:None
-        tightest_idx = -1
-        for i, cl in enumerate(cl_list):
-            if not cl["etextnum_start"] and not cl["etextnum_end"]:
-                tightness = 999
-            elif not cl["etextnum_start"] or not cl["etextnum_end"]:
-                tightness = 998
+        # Simple implementation for backward compatibility
+        for cl in self.cls:
+            if vnum < cl["vnum_start"] or vnum > cl["vnum_end"]:
+                continue
+            
+            # Check etext range
+            if cl["etextnum_start"] and cl["etextnum_end"]:
+                if vnum == cl["vnum_start"] and vnum == cl["vnum_end"]:
+                    if etextnum >= cl["etextnum_start"] and etextnum <= cl["etextnum_end"]:
+                        return cl["mw"]
+                elif vnum == cl["vnum_start"]:
+                    if etextnum >= cl["etextnum_start"]:
+                        return cl["mw"]
+                elif vnum == cl["vnum_end"]:
+                    if etextnum <= cl["etextnum_end"]:
+                        return cl["mw"]
+                else:
+                    # Middle volume
+                    return cl["mw"]
             else:
-                tightness = cl["etextnum_end"] - cl["etextnum_start"]
-            if tightness < tightest:
-                tightest = tightness
-                tightest_idx = i
-        return cl_list[tightest_idx]["mw"]
+                # No etext constraints
+                return cl["mw"]
+        
+        return None
 
 class OutlinePageLookup:
     """
