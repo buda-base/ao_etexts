@@ -1,12 +1,62 @@
-"""Tests for TEI to text conversion in es_utils.py"""
+"""Tests for TEI to text conversion in es_utils.py
+
+Note: Due to complex dependencies (fs, opensearchpy, rdflib, etc.), this test
+imports and tests only the core conversion function by directly loading the needed
+components from es_utils.py.
+"""
 import unittest
+from lxml import etree
+import re
+from bisect import bisect
+from copy import deepcopy as python_deepcopy
+
+# Import just the functions we need for testing
 import sys
 import os
-from lxml import etree
-
-# Add parent directory to path to import the module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from bdrc_etext_sync.es_utils import convert_tei_root_to_text
+
+# We'll import the functions directly by executing just the conversion-related code
+# This avoids all the OpenSearch, fs, and other dependencies
+
+
+def deepcopy(element):
+    return python_deepcopy(element)
+
+
+def replace_element(old_element, new_element=None):
+    """Replace or remove an XML element while preserving content structure."""
+    parent = old_element.getparent()
+    if parent is None:
+        raise ValueError("Cannot replace/remove the root element")
+    tail_text = old_element.tail
+    if new_element is None:
+        prev_sibling = old_element.getprevious()
+        parent.remove(old_element)
+        if tail_text:
+            if prev_sibling is not None:
+                if prev_sibling.tail:
+                    prev_sibling.tail += tail_text
+                else:
+                    prev_sibling.tail = tail_text
+            else:
+                if parent.text:
+                    parent.text += tail_text
+                else:
+                    parent.text = tail_text
+    else:
+        new_element.tail = tail_text
+        parent.replace(old_element, new_element)
+
+
+# Load the actual convert_tei_root_to_text function
+exec(compile(open(os.path.join(os.path.dirname(__file__), '..', 'bdrc_etext_sync', 'es_utils.py')).read()
+                  .replace('from opensearchpy import', '#from opensearchpy import')
+                  .replace('from .chunkers import', '#from .chunkers import')
+                  .replace('from .buda_api import', '#from .buda_api import')
+                  .replace('from .fs_utils import', '#from .fs_utils import')
+                  .replace('import fs.path', '#import fs.path')
+                  .replace('import logging', 'import logging; logging.basicConfig(level=logging.ERROR)'),
+             '<string>', 'exec'))
 
 
 class TestTEIConversionOldFormat(unittest.TestCase):
@@ -46,6 +96,10 @@ This is on a new line.</p>
         # Check that hi annotations are tracked
         self.assertIn("hi", annotations)
         self.assertTrue(any(ann["rend"] == "small" for ann in annotations["hi"]))
+        
+        # Should not have new format features
+        self.assertNotIn("milestones", annotations)
+        self.assertNotIn("div_boundaries", annotations)
 
 
 class TestTEIConversionNewFormat(unittest.TestCase):
@@ -84,19 +138,25 @@ class TestTEIConversionNewFormat(unittest.TestCase):
         self.assertIn("milestones", annotations)
         self.assertIn("div1_0001", annotations["milestones"])
         self.assertIn("div1_0002", annotations["milestones"])
+        self.assertEqual(len(annotations["milestones"]), 2)
         
         # Check that head elements are in hi annotations
         self.assertIn("hi", annotations)
         head_annos = [ann for ann in annotations["hi"] if ann["rend"] == "head"]
-        self.assertEqual(len(head_annos), 2)
+        self.assertEqual(len(head_annos), 2, "Expected 2 head annotations")
         
         # Check proper spacing (two line breaks around heads, between divs)
         # Should have proper spacing but max 2 consecutive line breaks
-        self.assertNotIn("\n\n\n", text)
+        self.assertNotIn("\n\n\n", text, "Should not have more than 2 consecutive line breaks")
         
         # Check that milestone elements are not in the text
-        self.assertNotIn("milestone", text)
+        self.assertNotIn("milestone", text.lower())
         self.assertNotIn("div1_0001", text)
+        self.assertNotIn("div1_0002", text)
+        
+        # Check that div boundaries are tracked for chunking
+        self.assertIn("div_boundaries", annotations)
+        self.assertEqual(len(annotations["div_boundaries"]), 2)
 
 
 if __name__ == '__main__':
