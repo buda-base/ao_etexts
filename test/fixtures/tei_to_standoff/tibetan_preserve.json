@@ -4,7 +4,7 @@
     "pages": [
       {"pname": "1a", "pnum": 1, "cstart": 0, "cend": 91},
       {"pname": "1b", "pnum": 2, "cstart": 93, "cend": 218},
-      {"pname": "2a", "pnum": 3, "cstart": 220, "cend": 302}
+      {"pname": "2a", "pnum": 3, "cstart": 220, "cend": 299}
     ],
     "hi": []
   },

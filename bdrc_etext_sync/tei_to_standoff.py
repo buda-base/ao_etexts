@@ -91,9 +91,6 @@ def apply_position_diffs(positions, diffs, annotations):
             # Milestones is a dict of id -> coordinate, correct each coordinate
             for milestone_id in ann_list:
                 ann_list[milestone_id] = correct_position(ann_list[milestone_id], positions, diffs)
-        elif type == "div_boundaries":
-            # Div boundaries have special structure, skip them
-            continue
         else:
             # Regular annotations are lists of dicts with cstart/cend
             for ann in ann_list:
@@ -343,14 +340,38 @@ def trim_text_and_adjust_annotations(text, annotations):
     # Calculate how much we're trimming from the beginning
     s_count = len(re.match(r'^[\s\n]*', text).group())
     
-    # If nothing was trimmed, return as-is
-    if s_count == 0:
-        return text
+    # Trim leading whitespace
+    if s_count > 0:
+        # Shift annotations by negative offset (subtract the trimmed amount)
+        _shift_all_annotations(annotations, -s_count)
+        text = text[s_count:]
     
-    # Shift annotations by negative offset (subtract the trimmed amount)
-    _shift_all_annotations(annotations, -s_count)
+    # Trim trailing whitespace
+    e_match = re.search(r'[\s\n]*$', text)
+    if e_match and e_match.group():
+        e_count = len(e_match.group())
+        if e_count > 0:
+            # New text length after trimming
+            new_length = len(text) - e_count
+            text = text[:new_length]
+            
+            # Adjust any annotations that extend beyond the new end
+            # (though this shouldn't normally happen)
+            for key, anno_list in annotations.items():
+                if key == "milestones":
+                    # Milestones are a dict of id -> coordinate
+                    for milestone_id in anno_list:
+                        if anno_list[milestone_id] > new_length:
+                            anno_list[milestone_id] = new_length
+                else:
+                    # Regular annotations are lists of dicts with cstart/cend
+                    for anno in anno_list:
+                        if 'cstart' in anno and anno['cstart'] > new_length:
+                            anno['cstart'] = new_length
+                        if 'cend' in anno and anno['cend'] > new_length:
+                            anno['cend'] = new_length
     
-    return text[s_count:]
+    return text
 
 
 def convert_tei_root_to_standoff(root):
