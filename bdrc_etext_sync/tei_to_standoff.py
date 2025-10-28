@@ -13,7 +13,7 @@ import re
 import sys
 from bisect import bisect
 from copy import deepcopy as python_deepcopy
-
+import logging
 
 def deepcopy(element):
     """Helper function for deep copying XML elements."""
@@ -266,9 +266,14 @@ def normalize_new_lines(text, annotations):
     """Normalize newlines by removing surrounding whitespace."""
     def repl_nl_marker(m, cstart):
         return "\n"
+
+    def repl_nl_marker_multi(m, cstart):
+        return "\n\n"
     
     pat_str = r'[\t \r]*\n[\t \r]*'
     output = get_string(text, pat_str, repl_nl_marker, annotations)
+    pat_str = r'\n{3,}'
+    output = get_string(output, pat_str, repl_nl_marker_multi, annotations)
     return output
 
 
@@ -410,7 +415,7 @@ def convert_tei_root_to_standoff(root):
     body = root.xpath('//tei:body', namespaces=namespaces)
         
     if not body:
-        print("ERROR: No body element found in the TEI document", file=sys.stderr)
+        logging.error("No body element found in the TEI document")
         return None, None, None
     
     # Check if xml:space="preserve" is present
@@ -555,13 +560,8 @@ def convert_tei_root_to_standoff(root):
     xml_str = unescape_xml(xml_str, annotations)
     xml_str = normalize_new_lines(xml_str, annotations)
     
-    # Limit to max 2 consecutive line breaks if not xml:space="preserve"
-    if not xml_space_preserve:
-        xml_str = re.sub(r'\n{3,}', '\n\n', xml_str)
-    
     # Trim leading and trailing whitespace and adjust annotations
     xml_str = trim_text_and_adjust_annotations(xml_str, annotations)
-
     return xml_str, annotations, source_path
 
 

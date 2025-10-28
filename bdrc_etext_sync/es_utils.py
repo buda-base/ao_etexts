@@ -245,7 +245,7 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         etext_num = etext_data["etext_num"]
         # Get all milestone IDs referenced in the outline for this volume
         # This filters out milestones not in the outline to avoid too many segments
-        outline_milestone_ids = oel.get_milestone_ids_for_volume(vol_num, etext_num)
+        outline_milestone_ids = oel.get_milestone_ids_for_etext(vol_num, etext_num)
         
         text = etext_data["text"]
         annotations = etext_data["annotations"]
@@ -480,7 +480,7 @@ def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_versi
                                 doc_num, ie_lname, mw_lname, mw_root_lname,
                                 start_at_c, last_pnum):
     """Create a document from accumulated text and annotations."""
-    doc_name = f"{vol_name}_{doc_num:03d}"
+    doc_name = f"UT{vol_name[2:]}_{doc_num:04d}"
     
     # Shift page numbers
     _shift_pages(annotations, last_pnum)
@@ -601,6 +601,7 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
 
 def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
     docs_by_volume = get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname)
+    #print(json.dumps(docs_by_volume, ensure_ascii=False, indent=2))
     if docs_by_volume:
         send_docs_to_es(docs_by_volume, ie_lname)
     else:

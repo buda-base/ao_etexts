@@ -283,7 +283,7 @@ class OutlineEtextLookup:
         for cl, _, _ in g.triples((None, BDO.contentLocationInstance, BDR[ielname])):
             mw = g.value(None, BDO.contentLocation, cl)
             mw_lname = to_lname(mw)
-            volnum_start = g.value(cl, BDO.contentLocationVolume, 1)
+            volnum_start = g.value(cl, BDO.contentLocationVolume, None)
             if volnum_start:
                 volnum_start = int(volnum_start)
             else:
@@ -294,9 +294,11 @@ class OutlineEtextLookup:
                 volnum_end = int(volnum_end)
             else:
                 volnum_end = volnum_start
-            etextnum_start = g.value(cl, BDO.contentLocationEtext, 1)
+            etextnum_start = g.value(cl, BDO.contentLocationEtext, None)
             if etextnum_start:
                 etextnum_start = int(etextnum_start)
+            else:
+                etextnum_start = 1
             etextnum_end = g.value(cl, BDO.contentLocationEndEtext, None)
             if etextnum_end:
                 etextnum_end = int(etextnum_end)
