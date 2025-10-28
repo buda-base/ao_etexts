@@ -482,9 +482,6 @@ def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_versi
     """Create a document from accumulated text and annotations."""
     doc_name = f"UT{vol_name[2:]}_{doc_num:04d}"
     
-    # Shift page numbers
-    _shift_pages(annotations, last_pnum)
-    
     # Build document
     doc = _build_etext_doc(
         text, annotations, None,  # source_path
