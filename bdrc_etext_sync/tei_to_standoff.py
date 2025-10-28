@@ -301,6 +301,66 @@ def unescape_xml(text, annotations):
     return output
 
 
+def _shift_all_annotations(annotations, offset):
+    """
+    Shift all character coordinates by offset in place.
+    Handles both list-based annotations, milestone dict, and div_boundaries.
+    
+    Args:
+        annotations: The annotations dict to modify
+        offset: The amount to shift coordinates (can be negative)
+    """
+    if not offset:
+        return
+    
+    for key, anno_list in annotations.items():
+        if key == "milestones":
+            # Milestones is a dict of id -> coordinate
+            for milestone_id in anno_list:
+                new_pos = anno_list[milestone_id] + offset
+                # Clamp to 0 if negative
+                anno_list[milestone_id] = max(0, new_pos)
+        elif key == "div_boundaries":
+            # Div boundaries are a list of dicts with start/end
+            for boundary in anno_list:
+                boundary['start'] = max(0, boundary['start'] + offset)
+                boundary['end'] = max(0, boundary['end'] + offset)
+        else:
+            # Regular annotations are lists of dicts with cstart/cend
+            for anno in anno_list:
+                if 'cstart' in anno:
+                    anno['cstart'] = max(0, anno['cstart'] + offset)
+                if 'cend' in anno:
+                    anno['cend'] = max(0, anno['cend'] + offset)
+
+
+def trim_text_and_adjust_annotations(text, annotations):
+    """
+    Remove leading and trailing whitespace from text and adjust annotation coordinates.
+    
+    Args:
+        text: The text string to trim
+        annotations: The annotations dict to adjust
+    
+    Returns:
+        Trimmed text string
+    """
+    # Calculate how much we're trimming from the beginning
+    left_trimmed = len(text) - len(text.lstrip())
+    
+    # Trim the text
+    trimmed_text = text.strip()
+    
+    # If nothing was trimmed, return as-is
+    if left_trimmed == 0:
+        return trimmed_text
+    
+    # Shift annotations by negative offset (subtract the trimmed amount)
+    _shift_all_annotations(annotations, -left_trimmed)
+    
+    return trimmed_text
+
+
 def convert_tei_root_to_standoff(root):
     """
     Convert a TEI/XML file to plain text with standoff annotations.
@@ -485,6 +545,9 @@ def convert_tei_root_to_standoff(root):
     # Limit to max 2 consecutive line breaks if not xml:space="preserve"
     if not xml_space_preserve:
         xml_str = re.sub(r'\n{3,}', '\n\n', xml_str)
+    
+    # Trim leading and trailing whitespace and adjust annotations
+    xml_str = trim_text_and_adjust_annotations(xml_str, annotations)
 
     return xml_str, annotations, source_path
 

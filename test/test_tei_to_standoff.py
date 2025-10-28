@@ -149,82 +149,20 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
         with open(test_case['json_file'], 'r', encoding='utf-8') as f:
             expected = json.load(f)
         
-        # Verify text
-        self.assertEqual(text, expected['text'], 
-                        f"Text mismatch in {test_case['name']}")
+        # Build actual result
+        actual = {
+            "text": text,
+            "annotations": annotations,
+            "source_path": source_path
+        }
         
-        # Verify source_path
-        self.assertEqual(source_path, expected['source_path'],
-                        f"Source path mismatch in {test_case['name']}")
+        # Compare using deepdiff
+        from deepdiff import DeepDiff
+        diff = DeepDiff(expected, actual, ignore_order=False)
         
-        # Verify annotations structure
-        expected_annotations = expected.get('annotations', {})
-        
-        # Check milestones
-        if expected.get('has_milestones', False):
-            self.assertIn('milestones', annotations,
-                         f"Expected milestones in {test_case['name']}")
-            if 'milestones' in expected_annotations:
-                for ms_id, ms_pos in expected_annotations['milestones'].items():
-                    self.assertIn(ms_id, annotations['milestones'],
-                                 f"Missing milestone {ms_id} in {test_case['name']}")
-                    self.assertEqual(annotations['milestones'][ms_id], ms_pos,
-                                   f"Milestone {ms_id} position mismatch in {test_case['name']}")
-        else:
-            self.assertNotIn('milestones', annotations,
-                           f"Unexpected milestones in {test_case['name']}")
-        
-        # Check div_boundaries
-        if expected.get('has_div_boundaries', False):
-            self.assertIn('div_boundaries', annotations,
-                         f"Expected div_boundaries in {test_case['name']}")
-            if 'div_boundaries' in expected_annotations:
-                self.assertEqual(len(annotations['div_boundaries']), 
-                               len(expected_annotations['div_boundaries']),
-                               f"div_boundaries count mismatch in {test_case['name']}")
-        else:
-            self.assertNotIn('div_boundaries', annotations,
-                           f"Unexpected div_boundaries in {test_case['name']}")
-        
-        # Check pages
-        if 'pages' in expected_annotations:
-            self.assertIn('pages', annotations,
-                         f"Expected pages in {test_case['name']}")
-            expected_pages = expected_annotations['pages']
-            actual_pages = annotations['pages']
-            
-            self.assertEqual(len(actual_pages), len(expected_pages),
-                           f"Pages count mismatch in {test_case['name']}")
-            
-            for i, expected_page in enumerate(expected_pages):
-                actual_page = actual_pages[i]
-                if 'pname' in expected_page:
-                    self.assertEqual(actual_page['pname'], expected_page['pname'],
-                                   f"Page {i} name mismatch in {test_case['name']}")
-                if 'pnum' in expected_page:
-                    self.assertEqual(actual_page['pnum'], expected_page['pnum'],
-                                   f"Page {i} number mismatch in {test_case['name']}")
-                if 'cstart' in expected_page:
-                    self.assertEqual(actual_page['cstart'], expected_page['cstart'],
-                                   f"Page {i} cstart mismatch in {test_case['name']}")
-        
-        # Check hi annotations
-        if 'hi' in expected_annotations:
-            self.assertIn('hi', annotations,
-                         f"Expected hi annotations in {test_case['name']}")
-            expected_hi = expected_annotations['hi']
-            actual_hi = annotations['hi']
-            
-            # Check count matches
-            self.assertEqual(len(actual_hi), len(expected_hi),
-                           f"Hi annotations count mismatch in {test_case['name']}")
-            
-            # Check each hi has expected rend value
-            for i, expected_h in enumerate(expected_hi):
-                if 'rend' in expected_h:
-                    actual_h = actual_hi[i]
-                    self.assertEqual(actual_h['rend'], expected_h['rend'],
-                                   f"Hi {i} rend mismatch in {test_case['name']}")
+        # Assert no differences
+        self.assertEqual(diff, {}, 
+                        f"Mismatch in {test_case['name']}:\n{diff}")
 
 
 def load_tests(loader, tests, pattern):
@@ -255,6 +193,45 @@ def load_tests(loader, tests, pattern):
         suite.addTest(test_class(test_name))
     
     return suite
+
+
+def generate_expected_json(xml_file_path):
+    """
+    Generate a JSON string with the expected format for a fixture test.
+    
+    This helper function converts a TEI XML file and returns a JSON string
+    in the exact format expected by the test fixtures. Use this to easily
+    create new test fixtures.
+    
+    Args:
+        xml_file_path: Path to the XML file to convert
+        
+    Returns:
+        A JSON string with the expected format containing:
+        - text: The converted plain text
+        - annotations: The standoff annotations
+        - source_path: The source path (or null)
+    
+    Example:
+        >>> json_str = generate_expected_json('test.xml')
+        >>> print(json_str)
+        >>> # Save to a .json file to create a new fixture
+    """
+    from lxml import etree
+    import json
+    
+    parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
+    tree = etree.parse(xml_file_path, parser)
+    root = tree.getroot()
+    text, annotations, source_path = convert_tei_root_to_standoff(root)
+    
+    expected = {
+        "text": text,
+        "annotations": annotations,
+        "source_path": source_path
+    }
+    
+    return json.dumps(expected, indent=2, ensure_ascii=False)
 
 
 if __name__ == '__main__':
