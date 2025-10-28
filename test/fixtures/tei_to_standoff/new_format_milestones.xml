@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text>
+    <body xml:lang="bo">
+      <milestone xml:id="div1_0001" unit="section"/>
+      <div>
+        <head>མཛད་པ་པོའི་རྣམ་ཐར་མདོར་བསྡུས།</head>
+        <p>༄༅། ལྕམ་བླ་འགྱུར་མེད་རྒྱལ་མཚན་ནི། རབ་བྱུང་བཅུ་གསུམ་པའི་ནང་མི་ཉག་ལྕམ་པ་ཉི་འོད་སྡེ་བར་སྐུ་འཁྲུངས། </p>
+      </div>
+      <milestone xml:id="div1_0002" unit="section"/>
+      <div>
+        <head>སྔོན་འགྲོ་ཐར་ལམ་གསལ་བྱེད།</head>
+        <p>༄༅། སྔོན་འགྲོ་ཆོས་སྤྱོད་ཀྱི་རིམ་པ་ཐར་ལམ་གསལ་བྱེད་ཕན་བདེ་ཉི་མ་ཞེས་བྱ་བ་བཞུགས་སོ། །</p>
+      </div>
+    </body>
+  </text>
+</TEI>

@@ -6,7 +6,8 @@ import ocfl
 from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
 from .buda_api import get_buda_AO_info, send_sync_notification
-from .es_utils import sync_id_to_es, convert_tei_root_to_text, remove_previous_etext_es
+from .es_utils import sync_id_to_es, remove_previous_etext_es
+from .tei_to_standoff import convert_tei_root_to_standoff
 from .fs_utils import open_filesystem, _id_subdir_path
 import re
 from pathlib import Path
@@ -174,7 +175,7 @@ def get_ut_info(filesystem, xml_file_path):
 
     # Find all pb elements using the namespace
     nb_pages = len(root.findall('.//tei:pb', namespace))
-    plain_txt, annotations, src_path = convert_tei_root_to_text(root)
+    plain_txt, annotations, src_path = convert_tei_root_to_standoff(root)
     nb_characters = len(plain_txt)
     return nb_pages, nb_characters, src_path
 
