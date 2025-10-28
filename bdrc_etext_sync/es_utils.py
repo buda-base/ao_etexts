@@ -127,10 +127,10 @@ class EtextSegment:
         if "div_boundaries" in self.annotations:
             segment_annotations["div_boundaries"] = []
             for boundary in self.annotations["div_boundaries"]:
-                if boundary["start"] >= self.start_pos and boundary["start"] < self.end_pos:
+                if boundary["cstart"] >= self.start_pos and boundary["cstart"] < self.end_pos:
                     new_boundary = boundary.copy()
-                    new_boundary["start"] = boundary["start"] - self.start_pos + offset
-                    new_boundary["end"] = min(boundary["end"], self.end_pos) - self.start_pos + offset
+                    new_boundary["cstart"] = boundary["cstart"] - self.start_pos + offset
+                    new_boundary["cend"] = min(boundary["cend"], self.end_pos) - self.start_pos + offset
                     segment_annotations["div_boundaries"].append(new_boundary)
         
         return segment_annotations
@@ -653,8 +653,8 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
     # Chunk the text - if div_boundaries exist, chunk each div separately
     if "div_boundaries" in annotations and annotations["div_boundaries"]:
         for boundary in annotations["div_boundaries"]:
-            div_start = boundary["start"]
-            div_end = boundary["end"]
+            div_start = boundary["cstart"]
+            div_end = boundary["cend"]
             chunker = TibetanEasyChunker(base_string, 1500, div_start, div_end)
             chunk_indexes = chunker.get_chunks()
             for i in range(0, len(chunk_indexes) - 1):

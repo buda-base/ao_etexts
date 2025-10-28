@@ -215,13 +215,13 @@ def convert_div_boundaries(text, annotations):
     def repl_div_marker(m, cstart):
         marker = m.group(0)
         if 'div_start_marker' in marker:
-            div_boundaries.append({"start": cstart, "end": -1})
+            div_boundaries.append({"cstart": cstart, "cend": -1})
             current_div_index[0] += 1
             return ""  # No spacing needed at div start
         elif 'div_end_marker' in marker:
             if current_div_index[0] >= 0 and current_div_index[0] < len(div_boundaries):
                 # Record the position before adding spacing
-                div_boundaries[current_div_index[0]]["end"] = cstart
+                div_boundaries[current_div_index[0]]["cend"] = cstart
             return "\n\n"  # Add spacing after div end to separate adjacent divs
         return ""
     
@@ -231,7 +231,7 @@ def convert_div_boundaries(text, annotations):
     
     # Filter out any incomplete boundaries and adjust end positions
     # (end positions were recorded before we added the \n\n)
-    div_boundaries = [b for b in div_boundaries if b["end"] != -1]
+    div_boundaries = [b for b in div_boundaries if b["cend"] != -1]
     
     if div_boundaries:
         annotations["div_boundaries"] = div_boundaries
@@ -320,11 +320,6 @@ def _shift_all_annotations(annotations, offset):
                 new_pos = anno_list[milestone_id] + offset
                 # Clamp to 0 if negative
                 anno_list[milestone_id] = max(0, new_pos)
-        elif key == "div_boundaries":
-            # Div boundaries are a list of dicts with start/end
-            for boundary in anno_list:
-                boundary['start'] = max(0, boundary['start'] + offset)
-                boundary['end'] = max(0, boundary['end'] + offset)
         else:
             # Regular annotations are lists of dicts with cstart/cend
             for anno in anno_list:
@@ -346,19 +341,16 @@ def trim_text_and_adjust_annotations(text, annotations):
         Trimmed text string
     """
     # Calculate how much we're trimming from the beginning
-    left_trimmed = len(text) - len(text.lstrip())
-    
-    # Trim the text
-    trimmed_text = text.strip()
+    s_count = len(re.match(r'^[\s\n]*', text).group())
     
     # If nothing was trimmed, return as-is
-    if left_trimmed == 0:
-        return trimmed_text
+    if s_count == 0:
+        return text
     
     # Shift annotations by negative offset (subtract the trimmed amount)
-    _shift_all_annotations(annotations, -left_trimmed)
+    _shift_all_annotations(annotations, -s_count)
     
-    return trimmed_text
+    return text[s_count:]
 
 
 def convert_tei_root_to_standoff(root):

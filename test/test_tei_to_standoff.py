@@ -11,6 +11,9 @@ import sys
 import os
 import json
 import glob
+import logging
+import json
+from deepdiff import DeepDiff
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -22,13 +25,16 @@ from bdrc_etext_sync.tei_to_standoff import convert_tei_root_to_standoff
 def debug_annotations(text, annotations):
     """Create a debug view of text with annotation boundaries marked."""
     # Create a list of annotation boundaries to insert
+    #print(annotations)
     boundaries = []
     
     for anno_type, anno_list in annotations.items():
-        if anno_type == "milestones" or anno_type == "div_boundaries":
-            # Skip these annotation types
+        if anno_type == "milestones":
+            for milestone_id, milestone_coord in anno_list.items():
+                boundaries.append((milestone_coord, f"[milestone_{milestone_id}/]"))
             continue
         for anno in anno_list:
+            #logging.error(anno)
             # Store both the position and what to insert
             boundaries.append((anno['cstart'], f"[{anno_type}]"))
             boundaries.append((anno['cend'], f"[/{anno_type}]"))
@@ -135,6 +141,25 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
                     'json_file': json_file
                 })
     
+    def _test_coordinate(self, len_text, coord):
+        """ test that an annotation coordinate makes sense """
+        self.assertTrue(isinstance(coord, int))
+        self.assertTrue(coord > -1)
+        self.assertTrue(coord <= len_text)
+
+    def _test_annotation_boundaries(self, text, annotations):
+        """ tests that annotations character coordinates make sense """
+        len_text = len(text)
+        for anno_type, anno_list in annotations.items():
+            if anno_type == "milestones":
+                for milestone_id, milestone_coord in anno_list.items():
+                    self._test_coordinate(len_text, milestone_coord)
+                continue
+            for anno in anno_list:
+                self._test_coordinate(len_text, anno['cstart'])
+                self._test_coordinate(len_text, anno['cend'])
+                self.assertTrue(anno['cstart'] <= anno['cend'])
+
     def _test_fixture(self, test_case):
         """Run a test for a given fixture."""
         # Load XML
@@ -144,6 +169,8 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
         
         # Convert
         text, annotations, source_path = convert_tei_root_to_standoff(root)
+        self._test_annotation_boundaries(text, annotations)
+
         
         # Load expectations
         with open(test_case['json_file'], 'r', encoding='utf-8') as f:
@@ -156,14 +183,16 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
             "source_path": source_path
         }
         
+        #print(json.dumps(actual, ensure_ascii=False, indent=2))
+        #print(debug_annotations(text, annotations))
+
         # Compare using deepdiff
-        from deepdiff import DeepDiff
         diff = DeepDiff(expected, actual, ignore_order=False)
+        #logging.error(diff)
         
         # Assert no differences
-        self.assertEqual(diff, {}, 
-                        f"Mismatch in {test_case['name']}:\n{diff}")
-
+        self.assertEqual(diff, {}, f"Mismatch in {test_case['name']}:\n{diff}")
+        #self.assertEqual("", "")
 
 def load_tests(loader, tests, pattern):
     """Dynamically generate test methods for each fixture."""
