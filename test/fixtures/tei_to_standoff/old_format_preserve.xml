@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text>
+    <body xml:space="preserve">
+      <pb n="122"/>
+      <p>This is the first paragraph.
+This is on a new line.</p>
+      <pb n="123"/>
+      This is on a new page.
+      This is on a new line
+      <pb n="124"/>
+      This starts a <hi rend="small">highlight</hi> text.
+    </body>
+  </text>
+</TEI>

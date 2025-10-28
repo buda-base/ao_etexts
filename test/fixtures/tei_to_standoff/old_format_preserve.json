@@ -1,0 +1,16 @@
+{
+  "text": "This is the first paragraph.\nThis is on a new line.\n\nThis is on a new page.\nThis is on a new line\n\nThis starts a highlight text.",
+  "annotations": {
+    "pages": [
+      {"pname": "122", "pnum": 1, "cstart": 0},
+      {"pname": "123", "pnum": 2},
+      {"pname": "124", "pnum": 3}
+    ],
+    "hi": [
+      {"rend": "small"}
+    ]
+  },
+  "has_milestones": false,
+  "has_div_boundaries": false,
+  "source_path": null
+}
