@@ -301,6 +301,51 @@ def unescape_xml(text, annotations):
     return output
 
 
+def trim_text_and_adjust_annotations(text, annotations):
+    """
+    Remove leading and trailing whitespace from text and adjust annotation coordinates.
+    
+    Args:
+        text: The text string to trim
+        annotations: The annotations dict to adjust
+    
+    Returns:
+        Trimmed text string
+    """
+    # Calculate how much we're trimming from the beginning
+    left_trimmed = len(text) - len(text.lstrip())
+    
+    # Trim the text
+    trimmed_text = text.strip()
+    
+    # If nothing was trimmed, return as-is
+    if left_trimmed == 0:
+        return trimmed_text
+    
+    # Adjust all annotation coordinates by subtracting the left trim amount
+    # Clamp negative values to 0 (they were in the trimmed region)
+    for type, ann_list in annotations.items():
+        if type == "milestones":
+            # Milestones is a dict of id -> coordinate
+            for milestone_id in ann_list:
+                new_pos = ann_list[milestone_id] - left_trimmed
+                ann_list[milestone_id] = max(0, new_pos)
+        elif type == "div_boundaries":
+            # Div boundaries have start/end
+            for boundary in ann_list:
+                boundary["start"] = max(0, boundary["start"] - left_trimmed)
+                boundary["end"] = max(0, boundary["end"] - left_trimmed)
+        else:
+            # Regular annotations are lists of dicts with cstart/cend
+            for ann in ann_list:
+                if "cstart" in ann:
+                    ann["cstart"] = max(0, ann["cstart"] - left_trimmed)
+                if "cend" in ann:
+                    ann["cend"] = max(0, ann["cend"] - left_trimmed)
+    
+    return trimmed_text
+
+
 def convert_tei_root_to_standoff(root):
     """
     Convert a TEI/XML file to plain text with standoff annotations.
@@ -485,6 +530,9 @@ def convert_tei_root_to_standoff(root):
     # Limit to max 2 consecutive line breaks if not xml:space="preserve"
     if not xml_space_preserve:
         xml_str = re.sub(r'\n{3,}', '\n\n', xml_str)
+    
+    # Trim leading and trailing whitespace and adjust annotations
+    xml_str = trim_text_and_adjust_annotations(xml_str, annotations)
 
     return xml_str, annotations, source_path
 
