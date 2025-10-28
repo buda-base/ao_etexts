@@ -301,6 +301,39 @@ def unescape_xml(text, annotations):
     return output
 
 
+def _shift_all_annotations(annotations, offset):
+    """
+    Shift all character coordinates by offset in place.
+    Handles both list-based annotations, milestone dict, and div_boundaries.
+    
+    Args:
+        annotations: The annotations dict to modify
+        offset: The amount to shift coordinates (can be negative)
+    """
+    if not offset:
+        return
+    
+    for key, anno_list in annotations.items():
+        if key == "milestones":
+            # Milestones is a dict of id -> coordinate
+            for milestone_id in anno_list:
+                new_pos = anno_list[milestone_id] + offset
+                # Clamp to 0 if negative
+                anno_list[milestone_id] = max(0, new_pos)
+        elif key == "div_boundaries":
+            # Div boundaries are a list of dicts with start/end
+            for boundary in anno_list:
+                boundary['start'] = max(0, boundary['start'] + offset)
+                boundary['end'] = max(0, boundary['end'] + offset)
+        else:
+            # Regular annotations are lists of dicts with cstart/cend
+            for anno in anno_list:
+                if 'cstart' in anno:
+                    anno['cstart'] = max(0, anno['cstart'] + offset)
+                if 'cend' in anno:
+                    anno['cend'] = max(0, anno['cend'] + offset)
+
+
 def trim_text_and_adjust_annotations(text, annotations):
     """
     Remove leading and trailing whitespace from text and adjust annotation coordinates.
@@ -322,26 +355,8 @@ def trim_text_and_adjust_annotations(text, annotations):
     if left_trimmed == 0:
         return trimmed_text
     
-    # Adjust all annotation coordinates by subtracting the left trim amount
-    # Clamp negative values to 0 (they were in the trimmed region)
-    for type, ann_list in annotations.items():
-        if type == "milestones":
-            # Milestones is a dict of id -> coordinate
-            for milestone_id in ann_list:
-                new_pos = ann_list[milestone_id] - left_trimmed
-                ann_list[milestone_id] = max(0, new_pos)
-        elif type == "div_boundaries":
-            # Div boundaries have start/end
-            for boundary in ann_list:
-                boundary["start"] = max(0, boundary["start"] - left_trimmed)
-                boundary["end"] = max(0, boundary["end"] - left_trimmed)
-        else:
-            # Regular annotations are lists of dicts with cstart/cend
-            for ann in ann_list:
-                if "cstart" in ann:
-                    ann["cstart"] = max(0, ann["cstart"] - left_trimmed)
-                if "cend" in ann:
-                    ann["cend"] = max(0, ann["cend"] - left_trimmed)
+    # Shift annotations by negative offset (subtract the trimmed amount)
+    _shift_all_annotations(annotations, -left_trimmed)
     
     return trimmed_text
 

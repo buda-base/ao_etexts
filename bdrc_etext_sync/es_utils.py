@@ -14,7 +14,7 @@ from opensearchpy import OpenSearch, helpers
 from .chunkers import TibetanEasyChunker
 from .buda_api import OutlineEtextLookup
 from .fs_utils import open_filesystem
-from .tei_to_standoff import convert_tei_root_to_standoff, convert_tei_to_standoff
+from .tei_to_standoff import convert_tei_root_to_standoff, convert_tei_to_standoff, _shift_all_annotations
 
 # Backward compatibility aliases
 convert_tei_root_to_text = convert_tei_root_to_standoff
@@ -678,29 +678,6 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
                 "text_bo": base_string[chunk_indexes[i]:chunk_indexes[i + 1]]
             })
     return etext_doc
-
-def _shift_all_annotations(annotations, start_at_c):
-    """
-    Shift all character coordinates by start_at_c in place.
-    Handles both list-based annotations, milestone dict, and div_boundaries.
-    """
-    if not start_at_c:
-        return annotations
-    for key, anno_list in annotations.items():
-        if key == "milestones":
-            # Milestones is a dict of id -> coordinate
-            for milestone_id in anno_list:
-                anno_list[milestone_id] += start_at_c
-        elif key == "div_boundaries":
-            # Div boundaries are a list of dicts with start/end
-            for boundary in anno_list:
-                boundary['start'] += start_at_c
-                boundary['end'] += start_at_c
-        else:
-            # Regular annotations are lists of dicts
-            for anno in anno_list:
-                anno['cstart'] += start_at_c
-                anno['cend'] += start_at_c
 
 def _shift_pages(annotations, p_shift):
     """

@@ -149,92 +149,20 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
         with open(test_case['json_file'], 'r', encoding='utf-8') as f:
             expected = json.load(f)
         
-        # Verify text
-        self.assertEqual(text, expected['text'], 
-                        f"Text mismatch in {test_case['name']}")
+        # Build actual result
+        actual = {
+            "text": text,
+            "annotations": annotations,
+            "source_path": source_path
+        }
         
-        # Verify source_path
-        self.assertEqual(source_path, expected['source_path'],
-                        f"Source path mismatch in {test_case['name']}")
+        # Compare using deepdiff
+        from deepdiff import DeepDiff
+        diff = DeepDiff(expected, actual, ignore_order=False)
         
-        # Verify annotations structure
-        expected_annotations = expected.get('annotations', {})
-        
-        # Check milestones
-        if 'milestones' in expected_annotations:
-            self.assertIn('milestones', annotations,
-                         f"Expected milestones in {test_case['name']}")
-            for ms_id, ms_pos in expected_annotations['milestones'].items():
-                self.assertIn(ms_id, annotations['milestones'],
-                             f"Missing milestone {ms_id} in {test_case['name']}")
-                self.assertEqual(annotations['milestones'][ms_id], ms_pos,
-                               f"Milestone {ms_id} position mismatch in {test_case['name']}")
-        
-        # Check div_boundaries
-        if 'div_boundaries' in expected_annotations:
-            self.assertIn('div_boundaries', annotations,
-                         f"Expected div_boundaries in {test_case['name']}")
-            expected_divs = expected_annotations['div_boundaries']
-            actual_divs = annotations['div_boundaries']
-            self.assertEqual(len(actual_divs), len(expected_divs),
-                           f"div_boundaries count mismatch in {test_case['name']}")
-            for i, expected_div in enumerate(expected_divs):
-                actual_div = actual_divs[i]
-                if 'start' in expected_div:
-                    self.assertEqual(actual_div['start'], expected_div['start'],
-                                   f"Div {i} start mismatch in {test_case['name']}")
-                if 'end' in expected_div:
-                    self.assertEqual(actual_div['end'], expected_div['end'],
-                                   f"Div {i} end mismatch in {test_case['name']}")
-        
-        # Check pages
-        if 'pages' in expected_annotations:
-            self.assertIn('pages', annotations,
-                         f"Expected pages in {test_case['name']}")
-            expected_pages = expected_annotations['pages']
-            actual_pages = annotations['pages']
-            
-            self.assertEqual(len(actual_pages), len(expected_pages),
-                           f"Pages count mismatch in {test_case['name']}")
-            
-            for i, expected_page in enumerate(expected_pages):
-                actual_page = actual_pages[i]
-                if 'pname' in expected_page:
-                    self.assertEqual(actual_page['pname'], expected_page['pname'],
-                                   f"Page {i} name mismatch in {test_case['name']}")
-                if 'pnum' in expected_page:
-                    self.assertEqual(actual_page['pnum'], expected_page['pnum'],
-                                   f"Page {i} number mismatch in {test_case['name']}")
-                if 'cstart' in expected_page:
-                    self.assertEqual(actual_page['cstart'], expected_page['cstart'],
-                                   f"Page {i} cstart mismatch in {test_case['name']}")
-                if 'cend' in expected_page:
-                    self.assertEqual(actual_page['cend'], expected_page['cend'],
-                                   f"Page {i} cend mismatch in {test_case['name']}")
-        
-        # Check hi annotations
-        if 'hi' in expected_annotations:
-            self.assertIn('hi', annotations,
-                         f"Expected hi annotations in {test_case['name']}")
-            expected_hi = expected_annotations['hi']
-            actual_hi = annotations['hi']
-            
-            # Check count matches
-            self.assertEqual(len(actual_hi), len(expected_hi),
-                           f"Hi annotations count mismatch in {test_case['name']}")
-            
-            # Check each hi has expected values
-            for i, expected_h in enumerate(expected_hi):
-                actual_h = actual_hi[i]
-                if 'rend' in expected_h:
-                    self.assertEqual(actual_h['rend'], expected_h['rend'],
-                                   f"Hi {i} rend mismatch in {test_case['name']}")
-                if 'cstart' in expected_h:
-                    self.assertEqual(actual_h['cstart'], expected_h['cstart'],
-                                   f"Hi {i} cstart mismatch in {test_case['name']}")
-                if 'cend' in expected_h:
-                    self.assertEqual(actual_h['cend'], expected_h['cend'],
-                                   f"Hi {i} cend mismatch in {test_case['name']}")
+        # Assert no differences
+        self.assertEqual(diff, {}, 
+                        f"Mismatch in {test_case['name']}:\n{diff}")
 
 
 def load_tests(loader, tests, pattern):
