@@ -1,62 +1,18 @@
-"""Tests for TEI to text conversion in es_utils.py
+"""Tests for TEI to text conversion.
 
-Note: Due to complex dependencies (fs, opensearchpy, rdflib, etc.), this test
-imports and tests only the core conversion function by directly loading the needed
-components from es_utils.py.
+This test suite validates the TEI/XML to standoff text conversion functionality.
+Now using the standalone tei_to_standoff module with minimal dependencies.
 """
 import unittest
 from lxml import etree
-import re
-from bisect import bisect
-from copy import deepcopy as python_deepcopy
-
-# Import just the functions we need for testing
 import sys
 import os
+
+# Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# We'll import the functions directly by executing just the conversion-related code
-# This avoids all the OpenSearch, fs, and other dependencies
-
-
-def deepcopy(element):
-    return python_deepcopy(element)
-
-
-def replace_element(old_element, new_element=None):
-    """Replace or remove an XML element while preserving content structure."""
-    parent = old_element.getparent()
-    if parent is None:
-        raise ValueError("Cannot replace/remove the root element")
-    tail_text = old_element.tail
-    if new_element is None:
-        prev_sibling = old_element.getprevious()
-        parent.remove(old_element)
-        if tail_text:
-            if prev_sibling is not None:
-                if prev_sibling.tail:
-                    prev_sibling.tail += tail_text
-                else:
-                    prev_sibling.tail = tail_text
-            else:
-                if parent.text:
-                    parent.text += tail_text
-                else:
-                    parent.text = tail_text
-    else:
-        new_element.tail = tail_text
-        parent.replace(old_element, new_element)
-
-
-# Load the actual convert_tei_root_to_text function
-exec(compile(open(os.path.join(os.path.dirname(__file__), '..', 'bdrc_etext_sync', 'es_utils.py')).read()
-                  .replace('from opensearchpy import', '#from opensearchpy import')
-                  .replace('from .chunkers import', '#from .chunkers import')
-                  .replace('from .buda_api import', '#from .buda_api import')
-                  .replace('from .fs_utils import', '#from .fs_utils import')
-                  .replace('import fs.path', '#import fs.path')
-                  .replace('import logging', 'import logging; logging.basicConfig(level=logging.ERROR)'),
-             '<string>', 'exec'))
+# Import the conversion function from the new standalone module
+from bdrc_etext_sync.tei_to_standoff import convert_tei_root_to_standoff
 
 
 class TestTEIConversionOldFormat(unittest.TestCase):
@@ -83,7 +39,7 @@ This is on a new line.</p>
         parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
         tree = etree.fromstring(test_xml.encode('utf-8'), parser)
         
-        text, annotations, source_path = convert_tei_root_to_text(tree)
+        text, annotations, source_path = convert_tei_root_to_standoff(tree)
         
         # Check that text is properly formatted
         self.assertIn("This is the first paragraph.", text)
@@ -122,7 +78,7 @@ This is on a new line.</p>
         parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
         tree = etree.fromstring(test_xml.encode('utf-8'), parser)
         
-        text, annotations, source_path = convert_tei_root_to_text(tree)
+        text, annotations, source_path = convert_tei_root_to_standoff(tree)
         
         # Check that Tibetan text is present
         self.assertIn("༄༅།", text)
@@ -169,7 +125,7 @@ class TestTEIConversionNewFormat(unittest.TestCase):
         parser = etree.XMLParser(remove_blank_text=True, remove_comments=True, remove_pis=True)
         tree = etree.fromstring(test_xml.encode('utf-8'), parser)
         
-        text, annotations, source_path = convert_tei_root_to_text(tree)
+        text, annotations, source_path = convert_tei_root_to_standoff(tree)
         
         # Check that text contains the content
         self.assertIn("མཛད་པ་པོའི་རྣམ་ཐར་མདོར་བསྡུས།", text)
