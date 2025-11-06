@@ -23,7 +23,13 @@ def _id_subdir_path(base_dir, id_s, use_fs=False):
     """
     sub = to_dirname(id_s)
     if use_fs:
-        return fs.path.join(base_dir, sub)
+        # For S3 URLs, use fs.path.join directly
+        if base_dir.startswith("s3://"):
+            return fs.path.join(base_dir, sub)
+        # For local paths, resolve to absolute path first to handle relative paths with ..
+        # This prevents IllegalBackReference errors from fs.path.join
+        resolved_base = os.path.abspath(base_dir)
+        return fs.path.join(resolved_base, sub)
     return os.path.join(base_dir, sub)
 
 def open_filesystem(path_or_url, create=False, writeable=True):
