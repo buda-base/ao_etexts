@@ -392,6 +392,49 @@ def align_div_boundaries_with_milestones(text, annotations):
             last_div["cend"] = milestones_after[0]
 
 
+def _format_context_snippet(text, position, marker, radius=10):
+    """Return a snippet of text around position with marker inserted."""
+    position = max(0, min(len(text), position))
+    start = max(0, position - radius)
+    end = min(len(text), position + radius)
+    before = text[start:position]
+    after = text[position:end]
+    snippet = f"{before}{marker}{after}"
+    return snippet.replace("\n", "\\n")
+
+
+def _debug_log_annotations(text, annotations):
+    """Emit detailed debug logs for milestones and div boundaries."""
+    logger = logging.getLogger()
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    milestones = annotations.get("milestones", {})
+    if milestones:
+        logger.debug("Milestones (%d entries):", len(milestones))
+        for milestone_id, coord in sorted(milestones.items(), key=lambda item: item[1]):
+            marker = f'<id="{milestone_id}">'  # no closing tag per requirements
+            snippet = _format_context_snippet(text, coord, marker)
+            logger.debug("  %s at %d -> %s", milestone_id, coord, snippet)
+    else:
+        logger.debug("Milestones: none found")
+
+    divs = annotations.get("div_boundaries", [])
+    if divs:
+        logger.debug("Div boundaries (%d entries):", len(divs))
+        for idx, div in enumerate(divs, start=1):
+            cstart = div.get("cstart", 0)
+            cend = div.get("cend", 0)
+            start_marker = f'<div_{idx}_start>'
+            end_marker = f'<div_{idx}_end>'
+            start_snippet = _format_context_snippet(text, cstart, start_marker)
+            end_snippet = _format_context_snippet(text, cend, end_marker)
+            logger.debug("  Div %d start %d -> %s", idx, cstart, start_snippet)
+            logger.debug("  Div %d end %d -> %s", idx, cend, end_snippet)
+    else:
+        logger.debug("Div boundaries: none found")
+
+
 def trim_text_and_adjust_annotations(text, annotations):
     """
     Remove leading and trailing whitespace from text and adjust annotation coordinates.
@@ -628,6 +671,8 @@ def convert_tei_root_to_standoff(root):
     if not xml_space_preserve:
         align_div_boundaries_with_milestones(xml_str, annotations)
     
+    _debug_log_annotations(xml_str, annotations)
+
     return xml_str, annotations, source_path
 
 
