@@ -379,10 +379,10 @@ def align_div_milestones_nl(text, annotations):
         current_end = div["cend"]
         next_start = next_div["cstart"]
         
-        # Find milestones strictly between this div's end and the next div's start
-        # (not at the boundaries themselves, as those are already aligned)
+        # Find milestones between this div's end and the next div's start (inclusive)
+        # In the "new format", milestones can be exactly at div boundaries
         milestones_in_gap = [m for m in milestone_positions 
-                            if current_end < m < next_start and m <= text_length]
+                            if current_end < m <= next_start and m <= text_length]
         
         if milestones_in_gap:
             # Use the first milestone as the boundary point
