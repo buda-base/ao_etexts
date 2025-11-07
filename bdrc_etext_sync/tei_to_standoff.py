@@ -364,8 +364,9 @@ def align_div_boundaries_with_milestones(text, annotations):
         current_end = div["cend"]
         next_start = next_div["cstart"]
         
-        # Find milestones between this div's end and the next div's start
-        milestones_in_gap = [m for m in milestone_positions if current_end <= m < next_start]
+        # Find milestones strictly between this div's end and the next div's start
+        # (not at the boundaries themselves, as those are already aligned)
+        milestones_in_gap = [m for m in milestone_positions if current_end < m < next_start]
         
         if milestones_in_gap:
             # Use the first milestone as the boundary point
@@ -381,11 +382,13 @@ def align_div_boundaries_with_milestones(text, annotations):
         current_end = last_div["cend"]
         text_length = len(text)
         
-        # Find milestones after the last div's current end
-        milestones_after = [m for m in milestone_positions if current_end <= m <= text_length]
+        # Find milestones strictly after the last div's current end
+        milestones_after = [m for m in milestone_positions if current_end < m <= text_length]
         
-        if milestones_after and milestones_after[0] < text_length:
-            last_div["cend"] = milestones_after[0]
+        if milestones_after:
+            # Only extend if the milestone is not at the very end of text
+            if milestones_after[0] < text_length:
+                last_div["cend"] = milestones_after[0]
 
 
 def trim_text_and_adjust_annotations(text, annotations):
