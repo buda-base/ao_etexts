@@ -160,6 +160,42 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
                 self._test_coordinate(len_text, anno['cend'])
                 self.assertTrue(anno['cstart'] <= anno['cend'])
 
+    def _check_milestone_div_alignment(self, annotations, text_length):
+        """Ensure each milestone aligns to div boundaries with edge-case allowances."""
+        divs = annotations.get("div_boundaries")
+        milestones = annotations.get("milestones")
+        if not divs or not milestones:
+            return
+        starts = {div["cstart"] for div in divs}
+        ends = {div["cend"] for div in divs}
+        for milestone_id, milestone_pos in milestones.items():
+            if milestone_pos == 0:
+                # Start of text: must align with some cstart but cend match not required
+                self.assertIn(
+                    milestone_pos,
+                    starts,
+                    f"Milestone {milestone_id} at {milestone_pos} does not match any div cstart"
+                )
+                continue
+            if milestone_pos == text_length:
+                # End of text: must align with some cend but cstart match not required
+                self.assertIn(
+                    milestone_pos,
+                    ends,
+                    f"Milestone {milestone_id} at {milestone_pos} does not match any div cend"
+                )
+                continue
+            self.assertIn(
+                milestone_pos,
+                starts,
+                f"Milestone {milestone_id} at {milestone_pos} does not match any div cstart"
+            )
+            self.assertIn(
+                milestone_pos,
+                ends,
+                f"Milestone {milestone_id} at {milestone_pos} does not match any div cend"
+            )
+
     def _test_fixture(self, test_case):
         """Run a test for a given fixture."""
         # Load XML
@@ -170,6 +206,7 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
         # Convert
         text, annotations, source_path = convert_tei_root_to_standoff(root)
         self._test_annotation_boundaries(text, annotations)
+        self._check_milestone_div_alignment(annotations, len(text))
 
         
         # Load expectations
@@ -183,7 +220,7 @@ class TestTEIConversionFromFixtures(unittest.TestCase):
             "source_path": source_path
         }
         
-        #print(json.dumps(actual, ensure_ascii=False, indent=2))
+        print(json.dumps(actual, ensure_ascii=False, indent=2))
         #print(debug_annotations(text, annotations))
 
         # Compare using deepdiff
