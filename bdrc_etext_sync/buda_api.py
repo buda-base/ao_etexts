@@ -280,15 +280,34 @@ class OutlineEtextLookup:
         if not g:
             logging.warning("no g")
             return
-        for cl, _, _ in g.triples((None, BDO.contentLocationInstance, BDR[ielname])):
+        outlineroot = g.value(BDR[olname], BDO.outlineOf, None)
+        if outlineroot is None:
+            logging.warning("outline root not found for %s", olname)
+            return
+
+        skip_part_types = {
+            BDR.PartTypeSection,
+            BDR.PartTypeVolume,
+            BDR.PartTypeCodicologicalVolume
+        }
+
+        def add_content_location(cl):
+            if (cl, BDO.contentLocationInstance, BDR[ielname]) not in g:
+                return False
+
             mw = g.value(None, BDO.contentLocation, cl)
+            if mw is None:
+                logging.warning("content location %s has no instance", cl)
+                return False
             mw_lname = to_lname(mw)
+
             volnum_start = g.value(cl, BDO.contentLocationVolume, None)
             if volnum_start:
                 volnum_start = int(volnum_start)
             else:
                 logging.warning("content location with no volume start, ignoring")
-                continue
+                return False
+
             volnum_end = g.value(cl, BDO.contentLocationEndVolume, None)
             if volnum_end:
                 volnum_end = int(volnum_end)
@@ -314,14 +333,37 @@ class OutlineEtextLookup:
                 end_id_in_etext = str(end_id_in_etext)
             
             self.cls.append({
-                "mw": mw_lname, 
-                "vnum_start": volnum_start, 
-                "vnum_end": volnum_end, 
-                "etextnum_start": etextnum_start, 
+                "mw": mw_lname,
+                "vnum_start": volnum_start,
+                "vnum_end": volnum_end,
+                "etextnum_start": etextnum_start,
                 "etextnum_end": etextnum_end,
                 "id_in_etext": id_in_etext,
                 "end_id_in_etext": end_id_in_etext
             })
+            return True
+
+        def traverse(node):
+            if node is None:
+                return
+            part_type = g.value(node, BDO.partType, None)
+            if part_type in skip_part_types:
+                for child in g.objects(node, BDO.hasPart):
+                    traverse(child)
+                return
+
+            cl = g.value(node, BDO.contentLocation, None)
+            if cl is None:
+                logging.debug("node %s without content location", node)
+            else:
+                added = add_content_location(cl)
+                if added:
+                    return
+
+            for child in g.objects(node, BDO.hasPart):
+                traverse(child)
+
+        traverse(outlineroot)
     
     def get_content_locations_for_volume(self, vnum):
         """
