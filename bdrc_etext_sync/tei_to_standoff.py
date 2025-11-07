@@ -226,8 +226,7 @@ def convert_div_boundaries(text, annotations):
     pat_str = r'<div_(start|end)_marker\s*/>'
     output = get_string(text, pat_str, repl_div_marker, annotations)
     
-    # Filter out any incomplete boundaries and adjust end positions
-    # (end positions were recorded before we added the \n\n)
+    # Filter out any incomplete boundaries
     div_boundaries = [b for b in div_boundaries if b["cend"] != -1]
     
     if div_boundaries:
@@ -329,6 +328,64 @@ def _shift_all_annotations(annotations, offset):
                     anno['cstart'] = max(0, anno['cstart'] + offset)
                 if 'cend' in anno:
                     anno['cend'] = max(0, anno['cend'] + offset)
+
+
+def align_div_boundaries_with_milestones(text, annotations):
+    """
+    Adjust div boundaries to align with milestones.
+    
+    This is a postprocessing step that ensures div boundaries properly align with
+    milestones. The issue is that during the multi-step text transformation process,
+    position tracking can become misaligned due to tag removal, whitespace normalization,
+    etc. This function corrects the div boundaries as a final step.
+    
+    For each div, we adjust both cend and the next div's cstart to align with any
+    milestones that fall between them. This ensures that milestones properly mark
+    div boundaries.
+    
+    Args:
+        text: The final text string
+        annotations: The annotations dict with div_boundaries and milestones
+    """
+    div_boundaries = annotations.get("div_boundaries")
+    milestones = annotations.get("milestones")
+    
+    if not div_boundaries or not milestones:
+        return
+    
+    # Get all milestone positions sorted
+    milestone_positions = sorted(milestones.values())
+    
+    # For each div (except the last), check if there's a milestone between
+    # its current end and the next div's start
+    for i in range(len(div_boundaries) - 1):
+        div = div_boundaries[i]
+        next_div = div_boundaries[i + 1]
+        current_end = div["cend"]
+        next_start = next_div["cstart"]
+        
+        # Find milestones between this div's end and the next div's start
+        milestones_in_gap = [m for m in milestone_positions if current_end <= m < next_start]
+        
+        if milestones_in_gap:
+            # Use the first milestone as the boundary point
+            boundary_pos = milestones_in_gap[0]
+            # Extend this div to the milestone
+            div["cend"] = boundary_pos
+            # Move the next div's start to the milestone
+            next_div["cstart"] = boundary_pos
+    
+    # Handle the last div - check if there's a milestone after its current end
+    if div_boundaries:
+        last_div = div_boundaries[-1]
+        current_end = last_div["cend"]
+        text_length = len(text)
+        
+        # Find milestones after the last div's current end
+        milestones_after = [m for m in milestone_positions if current_end <= m <= text_length]
+        
+        if milestones_after and milestones_after[0] < text_length:
+            last_div["cend"] = milestones_after[0]
 
 
 def trim_text_and_adjust_annotations(text, annotations):
@@ -562,6 +619,11 @@ def convert_tei_root_to_standoff(root):
     
     # Trim leading and trailing whitespace and adjust annotations
     xml_str = trim_text_and_adjust_annotations(xml_str, annotations)
+    
+    # Align div boundaries with milestones (postprocessing)
+    if not xml_space_preserve:
+        align_div_boundaries_with_milestones(xml_str, annotations)
+    
     return xml_str, annotations, source_path
 
 
