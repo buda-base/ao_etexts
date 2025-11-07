@@ -285,26 +285,53 @@ def _set_completer(parser, option_flag, completer):
             action.completer = completer
             break
 
+def _add_logging_arguments(parser):
+    """Add mutually exclusive debug/verbose/quiet logging options to a parser."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-d', '--debug', action='store_true', help='Enable debug output (log level DEBUG)')
+    group.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output (log level INFO)')
+    group.add_argument('-q', '--quiet', action='store_true', help='Reduce output to critical messages (log level CRITICAL)')
+
+def _configure_logging(args):
+    """Configure the root logger based on parsed CLI arguments."""
+    level = logging.WARNING
+    if getattr(args, 'debug', False):
+        level = logging.DEBUG
+    elif getattr(args, 'verbose', False):
+        level = logging.INFO
+    elif getattr(args, 'quiet', False):
+        level = logging.CRITICAL
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        root_logger.setLevel(level)
+    else:
+        logging.basicConfig(level=level)
+
 def main():
     # Create the top-level parser
     parser = argparse.ArgumentParser(prog='bdrc_etext_sync', description='BDRC eText management tool')
+    _add_logging_arguments(parser)
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     subparsers.required = True
 
     # Parser for the validate_files command
     validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
+    _add_logging_arguments(validate_parser)
     _add_id_or_idlist_arg(validate_parser)
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
     validate_parser.set_defaults(func=lambda a: for_each_id(a, validate_files_and_log))
 
     # Parser for the sync_archive command
     sync_parser = subparsers.add_parser('sync_archive', help='Synchronize files to archive for a specific ID')
+    _add_logging_arguments(sync_parser)
     _add_id_or_idlist_arg(sync_parser)
     sync_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_parser.set_defaults(func=lambda a: for_each_id(a, sync_files_archive))
 
     # Parser for the notify_sync command
     notify_parser = subparsers.add_parser('notify_sync', help='Send sync notification for files in a directory')
+    _add_logging_arguments(notify_parser)
     _add_id_or_idlist_arg(notify_parser)
     notify_parser.add_argument('--filesdir', required=True, help='Directory of files')
     notify_parser.add_argument('--version', required=True, help='OCFL version')
@@ -312,23 +339,27 @@ def main():
 
     # Parser for the sync_s3 command
     sync_s3_parser = subparsers.add_parser('sync_s3', help='Synchronize files to s3 for a specific ID')
+    _add_logging_arguments(sync_s3_parser)
     _add_id_or_idlist_arg(sync_s3_parser)
     sync_s3_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_s3_parser.set_defaults(func=lambda a: for_each_id(a, sync_files_s3))
 
     # Parser for the sync_es command
     sync_es_parser = subparsers.add_parser('sync_es', help='Synchronize files to ElasticSearch for a specific ID and path')
+    _add_logging_arguments(sync_es_parser)
     _add_id_or_idlist_arg(sync_es_parser)
     sync_es_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
     sync_es_parser.add_argument('--version', required=True, type=validate_version, help='OCFL version of the files')
     sync_es_parser.set_defaults(func=lambda a: for_each_id(a, sync_to_es))
 
     delete_es_parser = subparsers.add_parser('delete_es', help='Delete previous eText index in ElasticSearch for ID(s)')
+    _add_logging_arguments(delete_es_parser)
     _add_id_or_idlist_arg(delete_es_parser)
     delete_es_parser.set_defaults(func=lambda a: for_each_id(a, delete_es))
 
     # Parser for the get_archive_files command
     archive_parser = subparsers.add_parser('get_archive_files', help='Get archive files for a specific ID')
+    _add_logging_arguments(archive_parser)
     _add_id_or_idlist_arg(archive_parser)
     archive_parser.add_argument('--version', type=validate_version, default="head", 
                               help="Version of the archive files (format: 'v' followed by digits, or 'head'). Default is 'head'")
@@ -361,6 +392,7 @@ def main():
 
     # Parse arguments and call the appropriate function
     args = parser.parse_args()
+    _configure_logging(args)
     # If the subparser already wrapped func with for_each_id, just call it.
     args.func(args)
 
