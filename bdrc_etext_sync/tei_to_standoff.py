@@ -353,8 +353,9 @@ def align_div_boundaries_with_milestones(text, annotations):
     if not div_boundaries or not milestones:
         return
     
-    # Get all milestone positions sorted
+    # Get all milestone positions sorted once
     milestone_positions = sorted(milestones.values())
+    text_length = len(text)
     
     # For each div (except the last), check if there's a milestone between
     # its current end and the next div's start
@@ -366,7 +367,8 @@ def align_div_boundaries_with_milestones(text, annotations):
         
         # Find milestones strictly between this div's end and the next div's start
         # (not at the boundaries themselves, as those are already aligned)
-        milestones_in_gap = [m for m in milestone_positions if current_end < m < next_start]
+        milestones_in_gap = [m for m in milestone_positions 
+                            if current_end < m < next_start and m <= text_length]
         
         if milestones_in_gap:
             # Use the first milestone as the boundary point
@@ -377,18 +379,17 @@ def align_div_boundaries_with_milestones(text, annotations):
             next_div["cstart"] = boundary_pos
     
     # Handle the last div - check if there's a milestone after its current end
+    # but before the end of text (milestones at text_length are boundary markers)
     if div_boundaries:
         last_div = div_boundaries[-1]
         current_end = last_div["cend"]
-        text_length = len(text)
         
-        # Find milestones strictly after the last div's current end
-        milestones_after = [m for m in milestone_positions if current_end < m <= text_length]
+        # Find milestones strictly after the last div's current end but before text end
+        milestones_after = [m for m in milestone_positions 
+                           if current_end < m < text_length]
         
         if milestones_after:
-            # Only extend if the milestone is not at the very end of text
-            if milestones_after[0] < text_length:
-                last_div["cend"] = milestones_after[0]
+            last_div["cend"] = milestones_after[0]
 
 
 def trim_text_and_adjust_annotations(text, annotations):
