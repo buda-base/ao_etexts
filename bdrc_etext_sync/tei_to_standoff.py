@@ -84,56 +84,98 @@ def correct_position(current_position, positions, diffs):
     return current_position + diffs[previous_position_i-1]
 
 
-def apply_position_diffs(positions, diffs, annotations):
-    """Apply position diffs to annotations, handling special keys appropriately."""
+def apply_position_diffs(positions, diffs, annotations, collapsed_spans=None):
+    """
+    Apply position diffs to annotations.
+    For positions that were inside a SHRUNK match:
+      - preserve relative offset if it still fits in the replacement,
+      - otherwise clamp to the end of the replacement.
+    """
+    collapsed_spans = collapsed_spans or []
+
+    def remap_if_inside_shrunk(orig_pos):
+        """
+        If orig_pos was inside a shrinking match [s, e),
+        map it into the output using the replacement length:
+          new_pos = out_start + min(rel, replacement_len)
+        where out_start is the output idx corresponding to original s.
+        """
+        for s, e, repl_len in collapsed_spans:
+            if s <= orig_pos < e:
+                rel = orig_pos - s
+                # anchor at start (in output space), then add clamped rel
+                out_start = correct_position(s, positions, diffs)
+                # clamp rel to replacement length (end is valid landing spot)
+                clamped_rel = rel if rel < repl_len else repl_len
+                return out_start + clamped_rel
+        return None  # not inside any shrunk span
+
+    def adjust_point(orig_pos):
+        mapped = remap_if_inside_shrunk(orig_pos)
+        if mapped is not None:
+            return mapped
+        # default path: use the normal diff-based correction
+        return correct_position(orig_pos, positions, diffs)
+
     for type, ann_list in annotations.items():
         if type == "milestones":
-            # Milestones is a dict of id -> coordinate, correct each coordinate
+            # dict: id -> coordinate
             for milestone_id in ann_list:
-                ann_list[milestone_id] = correct_position(ann_list[milestone_id], positions, diffs)
+                ann_list[milestone_id] = adjust_point(ann_list[milestone_id])
         else:
-            # Regular annotations are lists of dicts with cstart/cend
+            # list of dicts with cstart/cend
             for ann in ann_list:
-                ann["cstart"] = correct_position(ann["cstart"], positions, diffs)
-                ann["cend"] = correct_position(ann["cend"], positions, diffs)
+                ann["cstart"] = adjust_point(ann["cstart"])
+                ann["cend"]   = adjust_point(ann["cend"])
 
 
 def get_string(orig, pattern_string, repl_fun, annotations):
     """
-    Apply regex replacement to string while tracking position changes for annotations.
-    
-    Args:
-        orig: Original string
-        pattern_string: Regex pattern
-        repl_fun: Replacement function that takes (match, output_len) and returns replacement
-        annotations: Annotations dict to update with position diffs
-    
-    Returns:
-        Transformed string
+    Apply regex replacement to string while tracking position changes for annotations. 
+    For shrinking matches, also record spans and replacement sizes so we can remap
+    points that were originally inside the match.
+
+    Args: 
+      orig: Original string 
+      pattern_string: Regex pattern 
+      repl_fun: Replacement function that takes (match, output_len) and returns replacement 
+      annotations: Annotations dict to update with position diffs 
+
+    Returns: Transformed string    
     """
     p = re.compile(pattern_string, flags=re.MULTILINE | re.DOTALL)
-    # for diffs
     diffs = []
     positions = []
     output = ""
     output_len = 0
     cumulative = 0
     last_match_end = 0
+
+    # (start, end, replacement_len) for shrinking matches
+    collapsed_spans = []
+
     for m in p.finditer(orig):
         group_size = m.end() - m.start()
         skipped_size = m.start() - last_match_end
         output += orig[last_match_end:m.start()]
         last_match_end = m.end()
         output_len += skipped_size
+
         replacement = repl_fun(m, output_len)
         replacement_len = len(replacement)
+
         if replacement_len < group_size:
+            # record shrinking span for smart point remapping later
+            collapsed_spans.append((m.start(), m.end(), replacement_len))
+
             ot_len = 0
-            if 'ot' in m.groupdict():  # opening tag
+            if 'ot' in m.groupdict():  # keep your existing special-case
                 ot_len = len(m.group('ot'))
                 add_position_diff(positions, diffs, m.start()+1, cumulative - ot_len)
+
             cumulative += replacement_len - group_size
             add_position_diff(positions, diffs, m.end(), cumulative)
+
         elif replacement_len > group_size:
             # when the replacement is large, new indexes point to
             # the last original index
@@ -145,13 +187,14 @@ def get_string(orig, pattern_string, repl_fun, annotations):
         output_len += replacement_len
 
     if last_match_end == 0:
-        # no match (?)
+        # no match
         return orig
 
     if last_match_end < len(orig):
         output += orig[last_match_end:]
 
-    apply_position_diffs(positions, diffs, annotations)
+    # pass collapsed spans so we can remap interior points
+    apply_position_diffs(positions, diffs, annotations, collapsed_spans=collapsed_spans)
     return output
 
 
@@ -193,7 +236,7 @@ def convert_milestones(text, annotations):
         return ""
     
     # Only consume leading whitespace, not trailing
-    pat_str = r'[\r\n\s]*<milestone_marker>(?P<id>.*?)</milestone_marker>'
+    pat_str = r'<milestone_marker>(?P<id>.*?)</milestone_marker>'
     output = get_string(text, pat_str, repl_milestone_marker, annotations)
     if milestone_coords:
         annotations["milestones"] = milestone_coords
@@ -270,10 +313,10 @@ def normalize_new_lines(text, annotations):
         return "\n\n"
     
     pat_str = r'[\t \r]*\n[\t \r]*'
-    output = get_string(text, pat_str, repl_nl_marker, annotations)
+    text = get_string(text, pat_str, repl_nl_marker, annotations)
     pat_str = r'\n{3,}'
-    output = get_string(output, pat_str, repl_nl_marker_multi, annotations)
-    return output
+    text = get_string(text, pat_str, repl_nl_marker_multi, annotations)
+    return text
 
 
 def unescape_xml(text, annotations):
@@ -367,47 +410,6 @@ def align_div_milestones_nl(text, annotations):
         if "cend" in boundary and boundary["cend"] is not None:
             boundary["cend"] = _skip_newlines(boundary["cend"])
 
-    # Get all milestone positions sorted once (after adjustment)
-    milestone_positions = sorted(milestones.values())
-    text_length = len(text)
-    
-    # For each div (except the last), check if there's a milestone between
-    # its current end and the next div's start
-    for i in range(len(div_boundaries) - 1):
-        div = div_boundaries[i]
-        next_div = div_boundaries[i + 1]
-        current_end = div["cend"]
-        next_start = next_div["cstart"]
-        
-        # Find milestones strictly between this div's end and the next div's start
-        # (not at the boundaries themselves, as those are already aligned)
-        milestones_in_gap = [m for m in milestone_positions 
-                            if current_end < m < next_start and m <= text_length]
-        
-        if milestones_in_gap:
-            # Use the first milestone as the boundary point
-            boundary_pos = milestones_in_gap[0]
-            # Extend this div to the milestone
-            adjusted_boundary = _skip_newlines(boundary_pos)
-            div["cend"] = adjusted_boundary
-            # Move the next div's start to the milestone (also skip newlines)
-            next_div["cstart"] = adjusted_boundary
-    
-    # Handle the last div - check if there's a milestone after its current end
-    # but before the end of text (milestones at text_length are boundary markers)
-    if div_boundaries:
-        last_div = div_boundaries[-1]
-        current_end = last_div["cend"]
-        
-        # Find milestones strictly after the last div's current end but before text end
-        milestones_after = [m for m in milestone_positions 
-                           if current_end < m < text_length]
-        
-        if milestones_after:
-            adjusted_last = _skip_newlines(milestones_after[0])
-            last_div["cend"] = adjusted_last
-
-
 def _format_context_snippet(text, position, marker, radius=10):
     """Return a snippet of text around position with marker inserted."""
     position = max(0, min(len(text), position))
@@ -498,6 +500,32 @@ def trim_text_and_adjust_annotations(text, annotations):
     
     return text
 
+def debug_annotations(text, annotations):
+    """Create a debug view of text with annotation boundaries marked."""
+    # Create a list of annotation boundaries to insert
+    #print(annotations)
+    boundaries = []
+    
+    for anno_type, anno_list in annotations.items():
+        if anno_type == "milestones":
+            for milestone_id, milestone_coord in anno_list.items():
+                boundaries.append((milestone_coord, f"[milestone_{milestone_id}/]"))
+            continue
+        for anno in anno_list:
+            #logging.error(anno)
+            # Store both the position and what to insert
+            boundaries.append((anno['cstart'], f"[{anno_type}]"))
+            boundaries.append((anno['cend'], f"[/{anno_type}]"))
+    
+    # Sort boundaries by position (descending)
+    # We process from end to beginning to avoid shifting positions
+    boundaries.sort(reverse=True)
+    
+    # Insert the markers
+    result = text
+    for position, marker in boundaries:
+        result = result[:position] + marker + result[position:]
+    return result
 
 def convert_tei_root_to_standoff(root):
     """
@@ -671,14 +699,18 @@ def convert_tei_root_to_standoff(root):
     xml_str = re.sub(r'[\r\n\t ]*<lb_marker>(.*?)</lb_marker>[\r\n\t ]*', r'\1', xml_str, flags=re.DOTALL)
 
     annotations = {}
-    if not xml_space_preserve:
-        xml_str = convert_div_boundaries(xml_str, annotations)
+    #print("\n\nstep 1\n\n"+debug_annotations(xml_str, annotations))
+    xml_str = convert_div_boundaries(xml_str, annotations)
+    #print("\n\nstep 2\n\n"+debug_annotations(xml_str, annotations))
     xml_str = convert_milestones(xml_str, annotations)
+    #print("\n\nstep 3\n\n"+debug_annotations(xml_str, annotations))
     xml_str = convert_pages(xml_str, annotations)
     xml_str = convert_hi(xml_str, annotations)
     xml_str = remove_other_markers(xml_str, annotations)
     xml_str = unescape_xml(xml_str, annotations)
+    #print("\n\nstep 4\n\n"+debug_annotations(xml_str, annotations))
     xml_str = normalize_new_lines(xml_str, annotations)
+    #print("\n\nstep 5\n\n"+debug_annotations(xml_str, annotations))
     
     # Trim leading and trailing whitespace and adjust annotations
     xml_str = trim_text_and_adjust_annotations(xml_str, annotations)
