@@ -651,9 +651,18 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
     # Chunk the text - if div_boundaries exist, chunk each div separately
     if "div_boundaries" in annotations and annotations["div_boundaries"]:
         for boundary in annotations["div_boundaries"]:
-            div_start = boundary["cstart"]
-            div_end = boundary["cend"]
-            chunker = TibetanEasyChunker(base_string, 1500, div_start, div_end)
+            div_start = boundary.get("cstart")
+            div_end = boundary.get("cend")
+            if div_start is None:
+                div_start = start_at_c
+            if div_end is None:
+                div_end = start_at_c + len(base_string)
+
+            rel_start = max(div_start - start_at_c, 0)
+            rel_end = div_end - start_at_c if div_end is not None else len(base_string)
+            rel_end = max(rel_start, min(rel_end, len(base_string)))
+
+            chunker = TibetanEasyChunker(base_string, 1500, rel_start, rel_end)
             chunk_indexes = chunker.get_chunks()
             for i in range(0, len(chunk_indexes) - 1):
                 if "chunks" not in etext_doc:
