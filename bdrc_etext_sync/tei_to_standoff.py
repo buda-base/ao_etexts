@@ -330,9 +330,9 @@ def _shift_all_annotations(annotations, offset):
                     anno['cend'] = max(0, anno['cend'] + offset)
 
 
-def align_div_boundaries_with_milestones(text, annotations):
+def align_div_milestones_nl(text, annotations):
     """
-    Adjust div boundaries to align with milestones.
+    Adjust div boundaries to align with milestones and skip trailing newlines.
     
     This is a postprocessing step that ensures div boundaries properly align with
     milestones. The issue is that during the multi-step text transformation process,
@@ -353,7 +353,21 @@ def align_div_boundaries_with_milestones(text, annotations):
     if not div_boundaries or not milestones:
         return
     
-    # Get all milestone positions sorted once
+    def _skip_newlines(position):
+        while position < len(text) and text[position] == "\n":
+            position += 1
+        return position
+
+    # Adjust milestones to skip newline characters
+    for milestone_id, coord in milestones.items():
+        milestones[milestone_id] = _skip_newlines(coord)
+
+    # Adjust div boundaries (cend) to skip newline characters
+    for boundary in div_boundaries:
+        if "cend" in boundary and boundary["cend"] is not None:
+            boundary["cend"] = _skip_newlines(boundary["cend"])
+
+    # Get all milestone positions sorted once (after adjustment)
     milestone_positions = sorted(milestones.values())
     text_length = len(text)
     
@@ -374,9 +388,10 @@ def align_div_boundaries_with_milestones(text, annotations):
             # Use the first milestone as the boundary point
             boundary_pos = milestones_in_gap[0]
             # Extend this div to the milestone
-            div["cend"] = boundary_pos
-            # Move the next div's start to the milestone
-            next_div["cstart"] = boundary_pos
+            adjusted_boundary = _skip_newlines(boundary_pos)
+            div["cend"] = adjusted_boundary
+            # Move the next div's start to the milestone (also skip newlines)
+            next_div["cstart"] = adjusted_boundary
     
     # Handle the last div - check if there's a milestone after its current end
     # but before the end of text (milestones at text_length are boundary markers)
@@ -389,7 +404,8 @@ def align_div_boundaries_with_milestones(text, annotations):
                            if current_end < m < text_length]
         
         if milestones_after:
-            last_div["cend"] = milestones_after[0]
+            adjusted_last = _skip_newlines(milestones_after[0])
+            last_div["cend"] = adjusted_last
 
 
 def _format_context_snippet(text, position, marker, radius=10):
@@ -669,7 +685,7 @@ def convert_tei_root_to_standoff(root):
     
     # Align div boundaries with milestones (postprocessing)
     if not xml_space_preserve:
-        align_div_boundaries_with_milestones(xml_str, annotations)
+        align_div_milestones_nl(xml_str, annotations)
     
     _debug_log_annotations(xml_str, annotations)
 
