@@ -185,6 +185,9 @@ def validate_files(eid, filesdir):
                 # Validate against TEI schema
                 try:
                     with resources.path('bdrc_etext_sync.schemas', 'tei_lite.rng') as schema_path:
+                        if schema_path is None:
+                            errors.append(f"Cannot find TEI schema file (tei_lite.rng) in bdrc_etext_sync.schemas package for {filename} in volume {volume}")
+                            continue
                         # This part assumes you have access to the TEI schema
                         # You might need to adjust this based on how you handle schemas
                         tei_schema = etree.RelaxNG(file=schema_path)
