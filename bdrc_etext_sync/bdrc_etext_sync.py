@@ -3,6 +3,7 @@ import argparse
 import sys
 import logging
 import ocfl
+from . import __version__
 from .validation import validate_files_and_log, validate_files
 from .s3_utils import sync_id_to_s3
 from .buda_api import get_buda_AO_info, send_sync_notification
@@ -345,6 +346,7 @@ def _configure_logging(args):
 def main():
     # Create the top-level parser
     parser = argparse.ArgumentParser(prog='bdrc_etext_sync', description='BDRC eText management tool')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     _add_logging_arguments(parser)
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     subparsers.required = True
