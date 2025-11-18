@@ -286,25 +286,55 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
                 for i, (m_id, m_pos) in enumerate(sorted_milestones):
                     segment = EtextSegment(text, annotations, prev_id, m_id, etext_num)
                     segment.volume_char_offset = volume_char_offset + segment.start_pos
-                    all_segments.append(segment)
+                    if segment.start_pos >= segment.end_pos:
+                        logging.warning(
+                            "Skipping zero-length segment %s -> %s in etext %s",
+                            prev_id or "start",
+                            m_id,
+                            etext_num,
+                        )
+                    else:
+                        all_segments.append(segment)
                     prev_id = m_id
                 
                 # Last segment: from last milestone to end
                 segment = EtextSegment(text, annotations, prev_id, None, etext_num)
                 segment.volume_char_offset = volume_char_offset + segment.start_pos
-                all_segments.append(segment)
+                if segment.start_pos >= segment.end_pos:
+                    logging.warning(
+                        "Skipping zero-length trailing segment %s -> end in etext %s",
+                        prev_id or "start",
+                        etext_num,
+                    )
+                else:
+                    all_segments.append(segment)
             else:
                 # No relevant milestones in this etext, treat whole etext as one segment
                 segment = EtextSegment(text, annotations, None, None, etext_num)
                 segment.volume_char_offset = volume_char_offset
-                all_segments.append(segment)
+                if segment.start_pos >= segment.end_pos:
+                    logging.warning("Skipping zero-length full etext segment in etext %s", etext_num)
+                else:
+                    all_segments.append(segment)
         else:
             # No milestones or no outline milestone IDs: whole etext is one segment
             segment = EtextSegment(text, annotations, None, None, etext_num)
             segment.volume_char_offset = volume_char_offset
-            all_segments.append(segment)
+            if segment.start_pos >= segment.end_pos:
+                logging.warning("Skipping zero-length segment in etext %s", etext_num)
+            else:
+                all_segments.append(segment)
         
         volume_char_offset += len(text)
+
+    lengths_summary = ", ".join(
+        f"etext {etext_data['etext_num']}: len={len(etext_data['text'])}"
+        for etext_data in converted_etexts
+    )
+    logging.info("volume %s etext lengths: %s", vol_name, lengths_summary or "none")
+    logging.info("volume %s generated %d segments", vol_name, len(all_segments))
+    for segment in all_segments:
+        logging.debug("segment %s length=%d", segment, segment.end_pos - segment.start_pos)
     
     # Now iterate through segments and build documents
     doc_counter = 0
