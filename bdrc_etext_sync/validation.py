@@ -75,6 +75,7 @@ def validate_files_and_log(args):
         logging.error("Validation errors:")
         for error in errors:
             logging.error("  "+error)
+    return passed, warns, errors
 
 def validate_files(eid, filesdir):
     """Validates files for a specific ID in the given directory.

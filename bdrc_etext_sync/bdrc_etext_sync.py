@@ -245,7 +245,10 @@ def sync_all(args):
     
     # Step 1: Validate files
     logging.info(f"Step 1/4: Validating files for {args.id}")
-    validate_files_and_log(args)
+    passed, warns, errors = validate_files_and_log(args)
+    if not passed:
+        logging.error(f"Abording because of invalid files for {args.id}")
+        return
     
     # Step 2: Sync to archive (this returns the version)
     logging.info(f"Step 2/4: Syncing files to archive for {args.id}")
