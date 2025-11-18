@@ -322,7 +322,21 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         if matching_cl:
             # Check for overlap: if a new CL starts before current one ends
             if current_doc_mw and current_doc_mw != matching_cl["mw"]:
-                logging.error(f"Overlap detected: text {matching_cl['mw']} starts before {current_doc_mw} ends at etext {segment.etext_num}")
+                current_doc_end_offset = current_doc_start_offset + len(current_doc_text)
+                new_segment_start_offset = segment.volume_char_offset
+                new_segment_end_offset = new_segment_start_offset + (segment.end_pos - segment.start_pos)
+                logging.error(
+                    "Overlap detected: new MW %s segment (%s -> %s) offsets %s-%s overlaps with current MW %s offsets %s-%s in etext %s",
+                    matching_cl["mw"],
+                    segment.start_id or "start",
+                    segment.end_id or "end",
+                    new_segment_start_offset,
+                    new_segment_end_offset,
+                    current_doc_mw,
+                    current_doc_start_offset,
+                    current_doc_end_offset,
+                    segment.etext_num,
+                )
                 # Finish current doc at the start of the new one
                 if current_doc_text:
                     doc_counter += 1
