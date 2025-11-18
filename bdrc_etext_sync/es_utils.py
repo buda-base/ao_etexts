@@ -142,10 +142,23 @@ CLIENT = None
 def get_os_client():
     global CLIENT
     if not CLIENT:
+        opensearch_user = os.getenv("OPENSEARCH_USER")
+        opensearch_pass = os.getenv("OPENSEARCH_PASS")
+        
+        if not opensearch_user or not opensearch_pass:
+            missing = []
+            if not opensearch_user:
+                missing.append("OPENSEARCH_USER")
+            if not opensearch_pass:
+                missing.append("OPENSEARCH_PASS")
+            raise ValueError(
+                f"Missing OpenSearch credentials. Please set the following environment variables: {', '.join(missing)}"
+            )
+        
         CLIENT = OpenSearch(
             hosts = [{'host': "opensearch.bdrc.io", 'port': 443}],
             http_compress = True, # enables gzip compression for request bodies
-            http_auth = (os.getenv("OPENSEARCH_USER"), os.getenv("OPENSEARCH_PASS")),
+            http_auth = (opensearch_user, opensearch_pass),
             use_ssl = True,
             timeout=120
         )
@@ -166,6 +179,10 @@ def remove_previous_etext_es(ie):
             }
         )
         logging.info(f"Deleted {response['deleted']} documents for {ie}.")
+    except ValueError as e:
+        # Credential error - re-raise with clear message
+        logging.error(f"OpenSearch credentials not configured: {e}")
+        raise
     except Exception as e:
         logging.error(f"An error occurred in deletion: {e}")
 
@@ -180,7 +197,11 @@ def send_docs_to_es(docs_by_volume, ie):
             for doc in volume_docs:
                 logging.info("send %s" % doc["_id"])
             response = helpers.bulk(get_os_client(), volume_docs, max_retries=2, request_timeout=120)
-    except:
+    except ValueError as e:
+        # Credential error - log clearly and re-raise
+        logging.error(f"OpenSearch credentials not configured: {e}")
+        raise
+    except Exception:
         logging.exception("The request to ES had an exception for " + ie)
 
 def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version):
