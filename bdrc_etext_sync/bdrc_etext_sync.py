@@ -174,8 +174,10 @@ def get_ut_info(filesystem, xml_file_path):
     namespace = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
     # Find all pb elements using the namespace
-    nb_pages = len(root.findall('.//tei:pb', namespace))
+    nb_pages = 0
     plain_txt, annotations, src_path = convert_tei_root_to_standoff(root)
+    if "pages" in annotations:
+        nb_pages = len(annotations["pages"])
     nb_characters = len(plain_txt)
     return nb_pages, nb_characters, src_path
 
@@ -233,6 +235,35 @@ def delete_es(args):
     """Remove previous eText index in ElasticSearch for this/these id(s)."""
     logging.info(f"Deleting previous eText index for {args.id}")
     return remove_previous_etext_es(args.id)
+
+def sync_all(args):
+    """
+    Performs a complete sync workflow: validate, sync to archive, sync to ES, and notify sync.
+    The version is obtained from the sync_archive step and used for subsequent steps.
+    """
+    logging.info(f"Starting complete sync workflow for {args.id}")
+    
+    # Step 1: Validate files
+    logging.info(f"Step 1/4: Validating files for {args.id}")
+    validate_files_and_log(args)
+    
+    # Step 2: Sync to archive (this returns the version)
+    logging.info(f"Step 2/4: Syncing files to archive for {args.id}")
+    version = sync_files_archive(args)
+    
+    # Set the version in args for subsequent steps
+    args.version = version
+    logging.info(f"Archive sync completed, version: {version}")
+    
+    # Step 3: Sync to ElasticSearch
+    logging.info(f"Step 3/4: Syncing files to ElasticSearch for {args.id}")
+    sync_to_es(args)
+    
+    # Step 4: Notify sync
+    logging.info(f"Step 4/4: Sending sync notification for {args.id}")
+    notify_sync(args)
+    
+    logging.info(f"Complete sync workflow finished for {args.id}")
 
 def get_archive_files(args):
     """Downloads archive files for a specific ID and optional version to the given directory."""
@@ -316,7 +347,7 @@ def main():
     subparsers.required = True
 
     # Parser for the validate_files command
-    validate_parser = subparsers.add_parser('validate_files', help='Validate files for a specific ID')
+    validate_parser = subparsers.add_parser('validate', help='Validate files for a specific ID')
     _add_logging_arguments(validate_parser)
     _add_id_or_idlist_arg(validate_parser)
     validate_parser.add_argument('--filesdir', required=True, help='Directory containing the files')
@@ -352,6 +383,13 @@ def main():
     sync_es_parser.add_argument('--version', required=True, type=validate_version, help='OCFL version of the files')
     sync_es_parser.set_defaults(func=lambda a: for_each_id(a, sync_to_es))
 
+    # Parser for the sync command (complete workflow)
+    sync_all_parser = subparsers.add_parser('sync', help='Complete sync workflow: validate, sync to archive, sync to ES, and notify sync')
+    _add_logging_arguments(sync_all_parser)
+    _add_id_or_idlist_arg(sync_all_parser)
+    sync_all_parser.add_argument('--filesdir', required=True, help='Directory to synchronize from')
+    sync_all_parser.set_defaults(func=lambda a: for_each_id(a, sync_all))
+
     delete_es_parser = subparsers.add_parser('delete_es', help='Delete previous eText index in ElasticSearch for ID(s)')
     _add_logging_arguments(delete_es_parser)
     _add_id_or_idlist_arg(delete_es_parser)
@@ -372,12 +410,14 @@ def main():
     _set_completer(notify_parser, '--filesdir', DirectoriesCompleter())
     _set_completer(sync_s3_parser, '--filesdir', DirectoriesCompleter())
     _set_completer(sync_es_parser, '--filesdir', DirectoriesCompleter())
+    _set_completer(sync_all_parser, '--filesdir', DirectoriesCompleter())
     _set_completer(archive_parser, '--filesdir', DirectoriesCompleter())
     _set_completer(validate_parser, '--idlistpath', FilesCompleter())
     _set_completer(sync_parser, '--idlistpath', FilesCompleter())
     _set_completer(notify_parser, '--idlistpath', FilesCompleter())
     _set_completer(sync_s3_parser, '--idlistpath', FilesCompleter())
     _set_completer(sync_es_parser, '--idlistpath', FilesCompleter())
+    _set_completer(sync_all_parser, '--idlistpath', FilesCompleter())
     _set_completer(delete_es_parser, '--idlistpath', FilesCompleter())
     _set_completer(archive_parser, '--idlistpath', FilesCompleter())
     # Version suggestions
