@@ -410,6 +410,46 @@ def align_div_milestones_nl(text, annotations):
         if "cend" in boundary and boundary["cend"] is not None:
             boundary["cend"] = _skip_newlines(boundary["cend"])
 
+
+def synthesize_page_boundary_milestones(annotations):
+    """
+    Synthesize milestone entries for page boundaries (bop: and eop: markers).
+    
+    This creates synthetic milestones based on page annotations so that outline
+    content locations can reference page boundaries using:
+    - bop:N - beginning of page N (at page cstart)
+    - eop:N - end of page N (at page cend)
+    
+    These are added to the milestones dict alongside any XML-defined milestones.
+    
+    Args:
+        annotations: The annotations dict with pages (and optionally milestones)
+    """
+    pages = annotations.get("pages", [])
+    if not pages:
+        return
+    
+    # Ensure milestones dict exists
+    if "milestones" not in annotations:
+        annotations["milestones"] = {}
+    
+    milestones = annotations["milestones"]
+    
+    for page in pages:
+        pnum = page.get("pnum")
+        if pnum is None:
+            continue
+        
+        # Create bop:N (beginning of page) at cstart
+        if "cstart" in page:
+            bop_id = f"bop:{pnum}"
+            milestones[bop_id] = page["cstart"]
+        
+        # Create eop:N (end of page) at cend
+        if "cend" in page:
+            eop_id = f"eop:{pnum}"
+            milestones[eop_id] = page["cend"]
+
 def _format_context_snippet(text, position, marker, radius=10):
     """Return a snippet of text around position with marker inserted."""
     position = max(0, min(len(text), position))
@@ -718,6 +758,10 @@ def convert_tei_root_to_standoff(root):
     # Align div boundaries with milestones (postprocessing)
     if not xml_space_preserve:
         align_div_milestones_nl(xml_str, annotations)
+    
+    # Synthesize bop: and eop: milestones for page boundaries
+    # These allow outline content locations to reference page boundaries
+    synthesize_page_boundary_milestones(annotations)
     
     _debug_log_annotations(xml_str, annotations)
 
