@@ -355,18 +355,21 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
                 current_doc_end_offset = current_doc_start_offset + len(current_doc_text)
                 new_segment_start_offset = segment.volume_char_offset
                 new_segment_end_offset = new_segment_start_offset + (segment.end_pos - segment.start_pos)
-                logging.error(
-                    "Overlap detected: new MW %s segment (%s -> %s) offsets %s-%s overlaps with current MW %s offsets %s-%s in etext %s",
-                    matching_cl["mw"],
-                    segment.start_id or "start",
-                    segment.end_id or "end",
-                    new_segment_start_offset,
-                    new_segment_end_offset,
-                    current_doc_mw,
-                    current_doc_start_offset,
-                    current_doc_end_offset,
-                    segment.etext_num,
-                )
+                # Only log overlap if there's a true overlap (new starts before current ends)
+                # Adjacent segments (new starts exactly where current ends) are not overlaps
+                if new_segment_start_offset < current_doc_end_offset:
+                    logging.error(
+                        "Overlap detected: new MW %s segment (%s -> %s) offsets %s-%s overlaps with current MW %s offsets %s-%s in etext %s",
+                        matching_cl["mw"],
+                        segment.start_id or "start",
+                        segment.end_id or "end",
+                        new_segment_start_offset,
+                        new_segment_end_offset,
+                        current_doc_mw,
+                        current_doc_start_offset,
+                        current_doc_end_offset,
+                        segment.etext_num,
+                    )
                 # Finish current doc at the start of the new one
                 if current_doc_text:
                     doc_counter += 1
@@ -417,20 +420,33 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
         else:
             # Gap: not covered by any content location
             if id(segment) not in processed_segments:
-                logging.error(f"Gap: etext {segment.etext_num} segment {segment.start_id}->{segment.end_id} not covered by outline")
-                # Create document with root MW
                 seg_text = segment.get_text()
-                if seg_text.strip():  # Only if there's actual content
-                    seg_annotations = segment.get_annotations_for_segment(0)
-                    doc_counter += 1
-                    doc = _create_document_from_parts(
-                        seg_text, seg_annotations,
-                        vol_name, vol_num, ocfl_version, doc_counter,
-                        ie_lname, mw_root_lname, mw_root_lname,
-                        segment.volume_char_offset, last_pnum
-                    )
-                    docs.append(doc)
-                    last_pnum = _get_last_pnum(seg_annotations, last_pnum)
+                
+                # Check if this is a trivial gap (whitespace only, e.g., newlines between pages)
+                if not seg_text.strip():
+                    # Merge trivial gap with current document if one exists
+                    if current_doc_mw:
+                        seg_annotations = segment.get_annotations_for_segment(len(current_doc_text))
+                        current_doc_text += seg_text
+                        _merge_annotations(current_doc_annotations, seg_annotations)
+                        processed_segments.add(id(segment))
+                        continue  # Don't log error for trivial gaps
+                    # else: first segment is trivial gap - will be picked up by next segment's start
+                    processed_segments.add(id(segment))
+                    continue
+                
+                # Non-trivial gap: log error and create document with root MW
+                logging.error(f"Gap: etext {segment.etext_num} in volume {vol_num} ({vol_name}) segment {segment.start_id}->{segment.end_id} not covered by outline")
+                seg_annotations = segment.get_annotations_for_segment(0)
+                doc_counter += 1
+                doc = _create_document_from_parts(
+                    seg_text, seg_annotations,
+                    vol_name, vol_num, ocfl_version, doc_counter,
+                    ie_lname, mw_root_lname, mw_root_lname,
+                    segment.volume_char_offset, last_pnum
+                )
+                docs.append(doc)
+                last_pnum = _get_last_pnum(seg_annotations, last_pnum)
                 processed_segments.add(id(segment))
     
     # Finish any remaining document
