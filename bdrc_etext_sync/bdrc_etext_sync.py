@@ -230,7 +230,11 @@ def sync_to_es(args):
     if not ie_info:
         logging.error(f"could not find {args.id} in the database")
         return
-    return sync_id_to_es(ie_info["mw_root_lname"], args.id, _id_subdir_path(args.filesdir, args.id), args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"])
+    
+    # Get image group mapping if available (extracted from ImageInstance in ao_res_from_model)
+    volnum_to_imagegroup = ie_info.get("volnum_to_imagegroup")
+    
+    return sync_id_to_es(ie_info["mw_root_lname"], args.id, _id_subdir_path(args.filesdir, args.id), args.version, ie_info["volname_to_volnum"], ie_info["mw_outline_lname"], volnum_to_imagegroup)
 
 def delete_es(args):
     """Remove previous eText index in ElasticSearch for this/these id(s)."""

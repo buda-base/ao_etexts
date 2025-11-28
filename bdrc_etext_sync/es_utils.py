@@ -204,7 +204,7 @@ def send_docs_to_es(docs_by_volume, ie):
     except Exception:
         logging.exception("The request to ES had an exception for " + ie)
 
-def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version):
+def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version, volnum_to_imagegroup=None):
     """
     Create documents from converted etexts without using outline information.
     Each etext becomes a separate document using the root MW.
@@ -228,7 +228,7 @@ def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, 
             vol_name, vol_num, ocfl_version,
             etext_data["doc_name"], etext_data["etext_num"],
             ie_lname, mw_root_lname, mw_root_lname,
-            last_cnum, last_pnum
+            last_cnum, last_pnum, volnum_to_imagegroup
         )
         docs.append(doc)
         
@@ -237,7 +237,7 @@ def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, 
     
     return docs
 
-def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version):
+def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version, volnum_to_imagegroup=None):
     """
     Segment converted etexts based on outline information with milestone boundaries.
     
@@ -256,7 +256,7 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
     
     if not content_locations:
         logging.warning(f"No content locations found for volume {vol_num}, using root MW")
-        return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version)
+        return _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, mw_root_lname, ocfl_version, volnum_to_imagegroup)
     
     # Build list of all milestone segments in order (only using outline-referenced milestones)
     all_segments = []
@@ -408,7 +408,7 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
                         current_doc_text, current_doc_annotations,
                         vol_name, vol_num, ocfl_version, doc_counter,
                         ie_lname, current_doc_mw, mw_root_lname,
-                        current_doc_start_offset, last_pnum
+                        current_doc_start_offset, last_pnum, volnum_to_imagegroup
                     )
                     docs.append(doc)
                     last_pnum = _get_last_pnum(current_doc_annotations, last_pnum)
@@ -443,7 +443,7 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
                     seg_text, seg_annotations,
                     vol_name, vol_num, ocfl_version, doc_counter,
                     ie_lname, mw_root_lname, mw_root_lname,
-                    segment.volume_char_offset, last_pnum
+                    segment.volume_char_offset, last_pnum, volnum_to_imagegroup
                 )
                 docs.append(doc)
                 last_pnum = _get_last_pnum(seg_annotations, last_pnum)
@@ -456,7 +456,7 @@ def _segment_etexts_by_outline(converted_etexts, oel, vol_name, vol_num, ie_lnam
             current_doc_text, current_doc_annotations,
             vol_name, vol_num, ocfl_version, doc_counter,
             ie_lname, current_doc_mw or mw_root_lname, mw_root_lname,
-            current_doc_start_offset, last_pnum
+            current_doc_start_offset, last_pnum, volnum_to_imagegroup
         )
         docs.append(doc)
     
@@ -559,7 +559,7 @@ def _get_last_pnum(annotations, current_last):
 
 def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_version,
                                 doc_num, ie_lname, mw_lname, mw_root_lname,
-                                start_at_c, last_pnum):
+                                start_at_c, last_pnum, volnum_to_imagegroup=None):
     """Create a document from accumulated text and annotations."""
     doc_name = f"UT{vol_name[2:]}_{doc_num:04d}"
     
@@ -569,13 +569,13 @@ def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_versi
         vol_name, vol_num, ocfl_version,
         doc_name, doc_num,
         ie_lname, mw_lname, mw_root_lname,
-        start_at_c, last_pnum
+        start_at_c, last_pnum, volnum_to_imagegroup
     )
     
     return doc
 
 
-def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
+def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname, volnum_to_imagegroup=None):
     """
     Process etexts for all volumes using outline-based segmentation.
     
@@ -592,6 +592,7 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         ocfl_version: OCFL version
         volname_to_volnum: Mapping of volume names to numbers
         outline_lname: Outline local name
+        volnum_to_imagegroup: Optional mapping from volume number to image group local name
     """
     logging.info(f"get docs for {local_dir_path}")
 
@@ -661,13 +662,13 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
         if oel:
             docs = _segment_etexts_by_outline(
                 converted_etexts, oel, vol_name, vol_num, ie_lname, 
-                mw_root_lname, ocfl_version
+                mw_root_lname, ocfl_version, volnum_to_imagegroup
             )
         else:
             # No outline: treat each etext as a separate document with root MW
             docs = _create_docs_without_outline(
                 converted_etexts, vol_name, vol_num, ie_lname,
-                mw_root_lname, ocfl_version
+                mw_root_lname, ocfl_version, volnum_to_imagegroup
             )
         
         if vol_name not in docs_by_volume:
@@ -677,8 +678,8 @@ def get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_v
     base_fs.close()
     return docs_by_volume
 
-def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname):
-    docs_by_volume = get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname)
+def sync_id_to_es(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname, volnum_to_imagegroup=None):
+    docs_by_volume = get_docs(mw_root_lname, ie_lname, local_dir_path, ocfl_version, volname_to_volnum, outline_lname, volnum_to_imagegroup)
     #print(json.dumps(docs_by_volume, ensure_ascii=False, indent=2))
     if docs_by_volume:
         send_docs_to_es(docs_by_volume, ie_lname)
@@ -703,7 +704,7 @@ def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_
         base_string += "\n\n"
     return len(base_string), new_last_pnum, _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, last_pnum)
 
-def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=1):
+def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=1, volnum_to_imagegroup=None):
     """Build the etext document structure."""
     etext_doc = {}
     etext_doc["_id"] = doc_name
@@ -722,6 +723,10 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
     etext_doc["source_path"] = source_path
     etext_doc["cstart"] = start_at_c
     etext_doc["cend"] = start_at_c+len(base_string)
+    
+    # Add etext_imagegroup if this IE is instanceReproductionOf a W and there's a matching image group
+    if volnum_to_imagegroup and vol_num in volnum_to_imagegroup:
+        etext_doc["etext_imagegroup"] = volnum_to_imagegroup[vol_num]
     _shift_all_annotations(annotations, start_at_c)
     _shift_pages(annotations, last_pnum)
     if "pages" in annotations:

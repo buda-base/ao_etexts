@@ -185,15 +185,51 @@ def ao_res_from_model(g, rlname):
         "mw_outline_lname": None,
         "mw_root_lname": None,
         "in_collection": [],
-        "volname_to_volnum": {}
+        "volname_to_volnum": {},
+        "volnum_to_imagegroup": None
     }
     rres = BDR[rlname]
-    try:
-        mwres = g.value(rres, BDO.instanceReproductionOf)
-        #print(g.serialize(format="ttl"))
-        mwres_lname = to_lname(mwres)
-        res["mw_lname"] = mwres_lname
-        res["mw_root_lname"] = mwres_lname
+    try:        
+        # Find the MW (non-ImageInstance) and extract image groups from any ImageInstance
+        mwres = None
+        volnum_to_imagegroup = {}
+        
+        for repof in list(g.objects(rres, BDO.instanceReproductionOf)):
+            # Check if this is an ImageInstance
+            if (repof, RDF.type, BDO.ImageInstance) in g:
+                # Extract image groups from this ImageInstance
+                for _, _, ig in g.triples((repof, BDO.instanceHasVolume, None)):
+                    vol_num = g.value(ig, BDO.volumeNumber)
+                    if vol_num is not None:
+                        iglname = str(ig)[str(ig).rfind('/')+1:]
+                        volnum_to_imagegroup[int(vol_num)] = iglname
+                
+                # Follow instanceReproductionOf to find the MW
+                mw_from_w = g.value(repof, BDO.instanceReproductionOf)
+                if mw_from_w:
+                    # Check if this MW is also an ImageInstance (shouldn't happen, but be safe)
+                    if (mw_from_w, RDF.type, BDO.ImageInstance) not in g:
+                        # Only set if we haven't found a MW yet, or if this is more specific
+                        if mwres is None:
+                            mwres = mw_from_w
+            else:
+                # This is the MW directly
+                if mwres is None:
+                    mwres = repof
+        
+        # If we found a MW, use it; otherwise use the first reproduction (fallback)
+        if not mwres and reproductions:
+            logging.error("could not find MW for "+rlname)
+        
+        if mwres:
+            mwres_lname = to_lname(mwres)
+            res["mw_lname"] = mwres_lname
+            res["mw_root_lname"] = mwres_lname
+        
+        # Store image group mapping if we found any
+        if volnum_to_imagegroup:
+            res["volnum_to_imagegroup"] = volnum_to_imagegroup
+        
         for _, _, c in g.triples((None, BDO.inCollection, None)):
             c_lname = to_lname(c)
             res["in_collection"].append(c_lname)
