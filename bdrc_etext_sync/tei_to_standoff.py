@@ -199,17 +199,24 @@ def get_string(orig, pattern_string, repl_fun, annotations):
 
 
 def convert_pages(text, annotations):
-    """Replace <pb_marker>{pname}</pb_marker> with spacing and track page boundaries."""
+    """Replace <pb_marker>{pname}</pb_marker> or <pb_marker/> with spacing and track page boundaries."""
     page_annotations = []
     
     def repl_pb_marker(m, cstart):
-        pname = m.group("pname")
+        # Handle both <pb_marker>text</pb_marker> and <pb_marker/>
+        pname = m.group("pname") if m.group("pname") else ""
+        # pname can be None or empty string if <pb/> has no n attribute
+        # Only include pname in the annotation if it has a value
+        page_ann = {"cstart": cstart + 2 if cstart > 0 else 0}
+        if pname:
+            page_ann["pname"] = pname
+        page_annotations.append(page_ann)
         # don't replace the first one
         repl = "\n\n" if cstart > 0 else ""
-        page_annotations.append({"pname": pname, "cstart": cstart + 2 if cstart > 0 else 0})
         return repl
     
-    pat_str = r'[\r\n\s]*<pb_marker>(?P<pname>.*?)</pb_marker>[\r\n\s]*'
+    # Match both <pb_marker>text</pb_marker> and self-closing <pb_marker/>
+    pat_str = r'[\r\n\s]*(?:<pb_marker>(?P<pname>.*?)</pb_marker>|<pb_marker\s*/>)[\r\n\s]*'
     output = get_string(text, pat_str, repl_pb_marker, annotations)
     for i, p_ann in enumerate(page_annotations):
         p_ann["pnum"] = i+1

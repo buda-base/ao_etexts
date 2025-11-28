@@ -100,10 +100,14 @@ class EtextSegment:
         if "pages" in self.annotations:
             segment_annotations["pages"] = []
             for page in self.annotations["pages"]:
-                if page["cstart"] >= self.start_pos and page["cstart"] < self.end_pos:
+                # Include pages that start within the segment or at the segment boundary
+                # This ensures empty pages at the end of documents are included
+                if page["cstart"] >= self.start_pos and page["cstart"] <= self.end_pos:
                     new_page = page.copy()
                     new_page["cstart"] = page["cstart"] - self.start_pos + offset
                     new_page["cend"] = min(page["cend"], self.end_pos) - self.start_pos + offset
+                    # Ensure cend is never negative and is at least cstart
+                    new_page["cend"] = max(new_page["cstart"], new_page["cend"], 0)
                     segment_annotations["pages"].append(new_page)
         
         # Handle hi (highlights)
@@ -114,6 +118,8 @@ class EtextSegment:
                     new_hi = hi.copy()
                     new_hi["cstart"] = hi["cstart"] - self.start_pos + offset
                     new_hi["cend"] = min(hi["cend"], self.end_pos) - self.start_pos + offset
+                    # Ensure cend is never negative and is at least cstart
+                    new_hi["cend"] = max(new_hi["cstart"], new_hi["cend"], 0)
                     segment_annotations["hi"].append(new_hi)
         
         # Handle milestones
@@ -131,6 +137,8 @@ class EtextSegment:
                     new_boundary = boundary.copy()
                     new_boundary["cstart"] = boundary["cstart"] - self.start_pos + offset
                     new_boundary["cend"] = min(boundary["cend"], self.end_pos) - self.start_pos + offset
+                    # Ensure cend is never negative and is at least cstart
+                    new_boundary["cend"] = max(new_boundary["cstart"], new_boundary["cend"], 0)
                     segment_annotations["div_boundaries"].append(new_boundary)
         
         return segment_annotations
@@ -217,12 +225,7 @@ def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, 
         text = etext_data["text"]
         annotations = etext_data["annotations"]
         
-        # Update page numbers
-        new_last_pnum = last_pnum
-        if "pages" in annotations and annotations["pages"]:
-            new_last_pnum += annotations["pages"][-1]["pnum"]
-        
-        # Create document
+        # Create document (this will shift page numbers by last_pnum)
         doc = _build_etext_doc(
             text, annotations, etext_data["source_path"],
             vol_name, vol_num, ocfl_version,
@@ -232,8 +235,13 @@ def _create_docs_without_outline(converted_etexts, vol_name, vol_num, ie_lname, 
         )
         docs.append(doc)
         
+        # Update last_pnum based on the shifted page numbers in the document
+        # After shifting, the last page number in this file is the new last_pnum
+        if "pages" in annotations and annotations["pages"]:
+            # Get the last page number after shifting (which happened in _build_etext_doc)
+            last_pnum = annotations["pages"][-1]["pnum"]
+        
         last_cnum += len(text)
-        last_pnum = new_last_pnum
     
     return docs
 
@@ -552,9 +560,20 @@ def _merge_annotations(target, source):
         target["milestones"].update(source["milestones"])
 
 def _get_last_pnum(annotations, current_last):
-    """Get the last page number from annotations."""
+    """
+    Get the maximum page number from annotations after they have been shifted.
+    
+    Args:
+        annotations: The annotations dict (pages should already be shifted)
+        current_last: The current last page number (fallback if no pages)
+    
+    Returns:
+        The maximum page number from annotations, or current_last if no pages
+    """
     if "pages" in annotations and annotations["pages"]:
-        return annotations["pages"][-1]["pnum"]
+        # Get the maximum page number (in case pages are not sorted)
+        max_pnum = max(page.get("pnum", 0) for page in annotations["pages"] if "pnum" in page)
+        return max(max_pnum, current_last) if max_pnum > 0 else current_last
     return current_last
 
 def _create_document_from_parts(text, annotations, vol_name, vol_num, ocfl_version,
@@ -697,14 +716,17 @@ def get_doc_from_content(xml_file_content, vol_name, vol_num, ocfl_version, doc_
     tree = etree.parse(xml_file_content, parser)
     root = tree.getroot()
     base_string, annotations, source_path = convert_tei_root_to_text(root)
+    # Build document (this will shift page numbers by last_pnum)
+    doc = _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, last_pnum)
+    # Get the last page number after shifting
     new_last_pnum = last_pnum
     if "pages" in annotations and annotations["pages"]:
-        new_last_pnum += annotations["pages"][-1]["pnum"]
+        new_last_pnum = annotations["pages"][-1]["pnum"]
     if add_pb:
         base_string += "\n\n"
-    return len(base_string), new_last_pnum, _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c, last_pnum)
+    return len(base_string), new_last_pnum, doc
 
-def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=1, volnum_to_imagegroup=None):
+def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, ocfl_version, doc_name, doc_num, ie_lname, mw_lname, mw_root_lname, start_at_c=0, last_pnum=0, volnum_to_imagegroup=None):
     """Build the etext document structure."""
     etext_doc = {}
     etext_doc["_id"] = doc_name
@@ -774,12 +796,20 @@ def _build_etext_doc(base_string, annotations, source_path, vol_name, vol_num, o
 
 def _shift_pages(annotations, p_shift):
     """
-    We have a list of annotations and we shift all character coordinates by start_at_c in place
+    Shift all page numbers by p_shift in place.
+    
+    Args:
+        annotations: The annotations dict to modify
+        p_shift: The amount to shift page numbers (0 means no shift, pages start at 1)
     """
-    if not p_shift or "pages" not in annotations:
+    if p_shift is None or "pages" not in annotations:
         return annotations
-    for anno in annotations["pages"]:
-        anno['pnum'] += p_shift
+    # p_shift can be 0 for the first file, which is valid (pages start at 1)
+    # Only shift if p_shift > 0
+    if p_shift > 0:
+        for anno in annotations["pages"]:
+            if "pnum" in anno:
+                anno['pnum'] += p_shift
 
 if __name__ == "__main__":
     # If command line arguments provided, process the specified file
