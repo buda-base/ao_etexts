@@ -5,6 +5,10 @@
 **Character set:** Unicode (UTF-8).
 **Namespace:** `http://www.tei-c.org/ns/1.0`
 
+This document describes the XML format that is expected in the BDRC etext archive.
+
+The format is a small subset of [TEI/XML](https://tei-c.org/). This document only describes the `<body>` part of the document, for the header structure and file organization, see [tei_xml_spec_header.md](tei_xml_spec_header.md) and [file_organization.md](file_organization.md).
+
 ---
 
 ## 1) The smallest valid file
@@ -123,10 +127,7 @@ These can appear **inside the `<p>`**, between `<lb/>` and text, or wrapping spa
 Use a `choice` to show original vs corrected reading.
 
 ```xml
-<choice>
-  <orig>བླ་མ་</orig>
-  <corr cert="low">བླ་མ།</corr>
-</choice>
+<choice><orig>བླ་མ་</orig><corr cert="low">བླ་མ།</corr></choice>
 ```
 
 * `cert` on `<corr>` is optional; use when uncertain.
@@ -140,8 +141,9 @@ Use a `choice` to show original vs corrected reading.
 ```xml
 <hi type="italic">བོད་</hi>
 <hi type="bold">ཡིག</hi>
-<hi type="head">Section Title</hi>
-<hi type="head_1">Main Title</hi>
+<hi type="head">Title (general)</hi>
+<hi type="head_1">Title Level 1</hi>
+<hi type="head_2">Title Level 2</hi>
 ```
 
 ---
@@ -175,3 +177,20 @@ Use a `choice` to show original vs corrected reading.
 <figure><head xml:lang="bo">རིས་ཀྱི་མཚན་</head></figure>
 <lb/>…text continues…
 ```
+
+--- 
+
+## 6) Detailed formatting rules
+
+- no empty file lines (here we call *file line* the lines in the xml files, delimited with `\n`, not xml markup `<lb/>`)
+- file should be encoded in UTF8 with no BOM and use `\n` as end of line character
+- no empty lines (`<lb/>\n`)
+- all pages should start with a `<pb/>` (even the first one), all lines should start with `<lb/>`, even the first one
+- `<pb/>` should always be the only thing in a file line (ex: no `<pb/><lb/>`)
+- empty `<pb/>` are allowed
+- if pagination (actual page number in the orginal) is not known, no `n="..."` attribute should be used in `<pb/>`
+- each file line must start with `<lb/>` or `<pb/>`, no spaces or tabs before
+- `<lb/>` and `<pb/>` tags should always be at the beginning of file lines
+- no `<hi>` within `<hi>`
+- no closing markup like `</hi>`, `</choice>`, etc. should be at the beginning of a line (ex: `<lb/></hi>`) or a page, it must be at the end of the previous line instead
+- no opening markup like `<hi>`, `<choice>`, etc. should be at the end of a line (ex: `...</hi>\n`) or a page, it must be at the beginning of the next line instead
