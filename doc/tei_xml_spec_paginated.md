@@ -148,6 +148,8 @@ replace XXX with anything that will help identify the text (ex: `D34` for the te
 
 ### 4.5 Editorial emendations
 
+##### 4.5.1 correction
+
 Use a `choice` to show original vs corrected reading.
 
 ```xml
@@ -155,6 +157,24 @@ Use a `choice` to show original vs corrected reading.
 ```
 
 * `cert` on `<corr>` is optional; use when uncertain.
+
+##### 4.5.2 regularization
+
+Use a `choice` to show original vs regularized reading.
+
+```xml
+<choice><orig>རི་དགས</orig><reg>རི་དྭགས</reg></choice>
+```
+
+Use this typically for archaic or regional spellings.
+
+##### 4.5.3 abbreviation expansion
+
+Use a `choice` to show abbreviated (སྐུང་ཡིག) vs expanded reading.
+
+```xml
+<choice><abbr>ཀེུན</abbr><expan>ཀུན་མཁྱེན</expan></choice>
+```
 
 ### 4.6 Modern styling (from modern sources)
 
