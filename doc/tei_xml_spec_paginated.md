@@ -9,16 +9,7 @@ This document describes the XML format that is expected in the BDRC etext archiv
 
 The format is a small subset of [TEI/XML](https://tei-c.org/). This document only describes the `<body>` part of the document, for the description of the header and the folder structure, see [README.md](README.md).
 
-Note that the content of the document must be normalized in the following way:
-- spaces normalization:
-   * no spaces at the beginning or end of lines
-   * no empty lines
-   * no BOM
-   * all spaces should be ASCII space (no tabs)
-   * no consecutive spaces
-   * possibly use [this function](https://github.com/buda-base/tibetan-etext-tools/blob/main/DKCC/normalization.py#L31)
-- non-Tibetan should be encoded in NFC (normalized form C), possibly using [this function](https://github.com/buda-base/tibetan-etext-tools/blob/main/DKCC/normalization.py#L76)
-- Tibetan should be normalized according to the rules of the pybo normalizer, possibly use [this function](https://github.com/buda-base/tibetan-etext-tools/blob/main/DKCC/normalization.py#L229)
+Note that the content of the document must be normalized according to the [text normalization rules](text_content_normalization.md).
 
 ---
 
