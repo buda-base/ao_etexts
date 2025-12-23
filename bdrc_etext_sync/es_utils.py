@@ -100,14 +100,15 @@ class EtextSegment:
         if "pages" in self.annotations:
             segment_annotations["pages"] = []
             for page in self.annotations["pages"]:
-                # Include pages that start within the segment or at the segment boundary
-                # This ensures empty pages at the end of documents are included
-                if page["cstart"] >= self.start_pos and page["cstart"] <= self.end_pos:
+                # Include pages that overlap with the segment (not just pages that start within it)
+                # A page overlaps if it starts before the segment ends AND ends after the segment starts
+                # This ensures pages that span across segment boundaries are included in both segments
+                if page["cstart"] < self.end_pos and page["cend"] > self.start_pos:
                     new_page = page.copy()
+                    # Keep the original full page boundaries (cstart/cend), don't truncate
+                    # The offset is for positioning within the document being built
                     new_page["cstart"] = page["cstart"] - self.start_pos + offset
-                    new_page["cend"] = min(page["cend"], self.end_pos) - self.start_pos + offset
-                    # Ensure cend is never negative and is at least cstart
-                    new_page["cend"] = max(new_page["cstart"], new_page["cend"], 0)
+                    new_page["cend"] = page["cend"] - self.start_pos + offset
                     segment_annotations["pages"].append(new_page)
         
         # Handle hi (highlights)
