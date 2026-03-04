@@ -181,6 +181,12 @@ Use a `choice` to show abbreviated (སྐུང་ཡིག) vs expanded readin
 <hi type="head_2">Title Level 2</hi>
 ```
 
+### 4.7 Footnotes / endnotes
+
+```xml
+<p>This is the main text<note n="1" place="foot">This is the text of the footnote numbered 1.</note>.</p>
+```
+
 ---
 
 ## 5) Element placement patterns
