@@ -131,6 +131,12 @@ replace XXX with anything that will help identify the text (ex: `D34` for the te
 <unclear reason="illegible" cert="low">བོད་</unclear>
 ```
 
+* **page impossible to convert:**
+
+```xml
+<pb/><gap reason="processing-error" extent="1 page"><desc>Text extraction from PDF failed.</desc></gap>
+```
+
 ### 4.4 Small-letter (yigchung)
 
 ```xml
