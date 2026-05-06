@@ -190,7 +190,15 @@ Use a `choice` to show abbreviated (སྐུང་ཡིག) vs expanded readin
 ### 4.7 Footnotes / endnotes
 
 ```xml
-<p>This is the main text<note n="1" place="foot">This is the text of the footnote numbered 1.</note>.</p>
+<p>This is the main text<note n="1" place="bottom">This is the text of the footnote numbered 1.</note>.</p>
+```
+
+```xml
+<p>This is the main <note n="1" place="end">Text of end note number one</note> text.</p>
+```
+
+```xml
+<p>This is the main <note place="inline">(Inline note)</note> text.</p>
 ```
 
 ---
