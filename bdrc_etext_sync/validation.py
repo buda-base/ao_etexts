@@ -11,6 +11,37 @@ from .fs_utils import _id_subdir_path
 from .validate_normalization import validate_tei_file_normalization, validate_tei_root_normalization
 from .validate_tei_subset import validate_tei_subset, validate_tei_root_subset
 
+
+ALLOWED_TOP_LEVEL_DIRS = {"archive", "sources"}
+IGNORED_JUNK_NAMES = {".DS_Store"}
+IGNORED_JUNK_PREFIXES = ("._",)
+IGNORED_JUNK_DIRS = {"__MACOSX", "__MACOS"}
+
+
+def _is_junk_name(name):
+    return (
+        name in IGNORED_JUNK_NAMES
+        or name in IGNORED_JUNK_DIRS
+        or name.startswith(IGNORED_JUNK_PREFIXES)
+    )
+
+
+def _expected_ut_prefix(volume_name):
+    """Return the UT id prefix derived from a VE volume id."""
+    if volume_name.startswith("VE"):
+        return "UT" + volume_name[2:]
+    return None
+
+
+def _add_junk_errors(root_dir, errors):
+    for current_dir, dirnames, filenames in os.walk(root_dir):
+        for dirname in list(dirnames):
+            if _is_junk_name(dirname):
+                errors.append(f"Junk directory {os.path.relpath(os.path.join(current_dir, dirname), root_dir)} found")
+        for filename in filenames:
+            if _is_junk_name(filename):
+                errors.append(f"Junk file {os.path.relpath(os.path.join(current_dir, filename), root_dir)} found")
+
 def get_volumes(ie_lname):
     """
     Fetch RDF data for a given IE resource and extract volume local names.
@@ -99,6 +130,21 @@ def validate_files(eid, filesdir):
     
     errors = []
     warns = []
+    if not os.path.isdir(filesdir):
+        errors.append(f"Directory not found: {filesdir}")
+        return False, warns, errors
+    
+    _add_junk_errors(filesdir, errors)
+    
+    top_level_entries = os.listdir(filesdir)
+    for entry in top_level_entries:
+        entry_path = os.path.join(filesdir, entry)
+        if _is_junk_name(entry):
+            continue
+        if os.path.isfile(entry_path):
+            errors.append(f"File {entry} found directly in {filesdir}; only archive/ and sources/ directories are allowed")
+        elif os.path.isdir(entry_path) and entry not in ALLOWED_TOP_LEVEL_DIRS:
+            errors.append(f"Directory {entry} found in {filesdir}; only archive/ and sources/ directories are allowed")
     
     # Catch exception in get_volumes
     try:
@@ -124,6 +170,13 @@ def validate_files(eid, filesdir):
         return False, warns, errors
     logger.debug("Archive directory found")
     
+    for entry in os.listdir(archive_dir):
+        entry_path = os.path.join(archive_dir, entry)
+        if _is_junk_name(entry):
+            continue
+        if os.path.isfile(entry_path):
+            errors.append(f"File {entry} found directly in archive/; only volume directories are allowed")
+    
     # Check if sources directory exists (optional)
     sources_dir = os.path.join(filesdir, "sources")
     sources_exist = os.path.isdir(sources_dir)
@@ -134,8 +187,10 @@ def validate_files(eid, filesdir):
         logger.debug("Sources directory found: %s", sources_dir)
     
     # Get all directories in archive folder
-    archive_subdirs = [d for d in os.listdir(archive_dir) 
-                       if os.path.isdir(os.path.join(archive_dir, d))]
+    archive_subdirs = [
+        d for d in os.listdir(archive_dir)
+        if not _is_junk_name(d) and os.path.isdir(os.path.join(archive_dir, d))
+    ]
     logger.debug("Found %d subdirectory(ies) in archive: %s", len(archive_subdirs), archive_subdirs)
 
     archive_subdirs = sorted(archive_subdirs)
@@ -181,12 +236,14 @@ def validate_files(eid, filesdir):
                     errors.append(f"File {filename} in volume {volume} does not end with .xml")
                     continue
                 
-                # Check filename format: volume_NNNN.xml
-                pattern = r"^UT[A-Z_\-0-9]+_([0-9]{4})\.xml$"
+                # Check filename format: the UT id is derived from the VE folder
+                ut_prefix = _expected_ut_prefix(volume)
+                pattern = rf"^{re.escape(ut_prefix)}_([0-9]{{4}})\.xml$" if ut_prefix else r"^$"
                 match = re.match(pattern, filename)
                 if not match:
                     logger.warning("File %s in volume %s does not follow naming pattern", filename, volume)
-                    errors.append(f"File {filename} in volume {volume} does not follow naming pattern UTXXX_NNNN.xml")
+                    expected_pattern = f"{ut_prefix}_NNNN.xml" if ut_prefix else "UT..._NNNN.xml derived from a VE... volume id"
+                    errors.append(f"File {filename} in volume {volume} does not follow naming pattern {expected_pattern}")
                     continue
                 
                 xml_files.append((filename, int(match.group(1))))
